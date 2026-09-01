@@ -1,0 +1,36 @@
+name: Deploy to Oracle VM
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/thepadel-server:latest
+
+      - name: Deploy on VM via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.ORACLE_VM_HOST }}
+          username: ${{ secrets.ORACLE_VM_USER }}
+          key: ${{ secrets.ORACLE_VM_SSH_KEY }}
+          script: |
+            docker pull ghcr.io/${{ github.repository_owner }}/thepadel-server:latest
+            docker stop thepadel-server || true
+            docker rm thepadel-server || true
+            docker run -d --name thepadel-server -p 8080:8080 --restart unless-stopped ghcr.io/${{ github.repository_owner }}/thepadel-server:latest
