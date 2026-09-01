@@ -8,6 +8,9 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Set lowercase repository owner
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - uses: actions/checkout@v4
 
       - name: Log in to GitHub Container Registry
@@ -21,7 +24,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/thepadel-server:latest
+          tags: ghcr.io/${{ env.OWNER_LC }}/thepadel-server:latest
 
       - name: Deploy on VM via SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -30,7 +33,7 @@ jobs:
           username: ${{ secrets.ORACLE_VM_USER }}
           key: ${{ secrets.ORACLE_VM_SSH_KEY }}
           script: |
-            docker pull ghcr.io/${{ github.repository_owner }}/thepadel-server:latest
+            docker pull ghcr.io/${{ env.OWNER_LC }}/thepadel-server:latest
             docker stop thepadel-server || true
             docker rm thepadel-server || true
-            docker run -d --name thepadel-server -p 8080:8080 --restart unless-stopped ghcr.io/${{ github.repository_owner }}/thepadel-server:latest
+            docker run -d --name thepadel-server -p 8080:8080 --restart unless-stopped ghcr.io/${{ env.OWNER_LC }}/thepadel-server:latest
