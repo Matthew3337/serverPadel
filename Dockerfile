@@ -1,12 +1,11 @@
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM gradle:8.9-jdk17 AS build
 WORKDIR /app
-COPY pom.xml .
-RUN mvn dependency:go-offline
+COPY build.gradle settings.gradle ./
 COPY src ./src
-RUN mvn clean package -DskipTests
+RUN gradle clean bootJar --no-daemon -x test
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:17-jre
 WORKDIR /app
-COPY --from=build /app/target/*.jar app.jar
+COPY --from=build /app/build/libs/*.jar app.jar
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
