@@ -39,4 +39,14 @@ jobs:
             docker pull ghcr.io/${{ env.OWNER_LC }}/thepadel-server:latest
             docker stop thepadel-server || true
             docker rm thepadel-server || true
-            docker run -d --name thepadel-server -p 8080:8080 --restart unless-stopped ghcr.io/${{ env.OWNER_LC }}/thepadel-server:latest
+            docker network create padel-net || true
+            docker run -d \
+              --name thepadel-server \
+              --network padel-net \
+              -p 8080:8080 \
+              --restart unless-stopped \
+              -e DB_HOST=padel-mysql \
+              -e DB_USER=root \
+              -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
+              -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
+              ghcr.io/${{ env.OWNER_LC }}/thepadel-server:latest
