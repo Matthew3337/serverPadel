@@ -12,7 +12,7 @@ public class AuthDTO {
         @NotBlank(message = "Il telefono è obbligatorio")
         private String telefono;
 
-        @NotBlank(message = "Il nome è obbligatorio")
+        @NotBlank(message = "Il nome è obbligatorio !")
         private String nome;
 
         @NotBlank(message = "Il cognome è obbligatorio")
