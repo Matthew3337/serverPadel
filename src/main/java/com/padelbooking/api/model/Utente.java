@@ -31,6 +31,9 @@ public class Utente {
     @Column(name = "is_admin", nullable = false)
     private Boolean isAdmin = false;
 
+    @Column(nullable = false)
+    private Double livello = 0.0;
+
     public Utente() {
     }
 
@@ -43,6 +46,18 @@ public class Utente {
         this.password = password;
         this.dataNascita = dataNascita;
         this.isAdmin = isAdmin;
+    }
+
+    public Utente(Integer id, String telefono, String nome, String cognome, String password,
+                  LocalDate dataNascita, Boolean isAdmin, Double livello) {
+        this.id = id;
+        this.telefono = telefono;
+        this.nome = nome;
+        this.cognome = cognome;
+        this.password = password;
+        this.dataNascita = dataNascita;
+        this.isAdmin = isAdmin;
+        this.livello = livello;
     }
 
     public Integer getId() {
@@ -99,5 +114,13 @@ public class Utente {
 
     public void setIsAdmin(Boolean isAdmin) {
         this.isAdmin = isAdmin;
+    }
+
+    public Double getLivello() {
+        return livello;
+    }
+
+    public void setLivello(Double livello) {
+        this.livello = livello;
     }
 }
