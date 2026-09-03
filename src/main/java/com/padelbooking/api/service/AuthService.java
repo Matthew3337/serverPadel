@@ -29,7 +29,7 @@ public class AuthService {
         this.jwtUtil = jwtUtil;
     }
 
-    public AuthDTO.AuthResponse register(AuthDTO.RegisterRequest request) {
+    public AuthDTO.UtenteResponse register(AuthDTO.RegisterRequest request) {
         if (utenteRepository.existsByTelefono(request.getTelefono())) {
             throw new BusinessRuleException("Esiste già un utente registrato con questo numero di telefono");
         }
@@ -44,9 +44,8 @@ public class AuthService {
 
         Utente salvato = utenteRepository.save(utente);
 
-        String token = jwtUtil.generateToken(salvato.getId(), salvato.getTelefono(), salvato.getIsAdmin());
-
-        return new AuthDTO.AuthResponse(token, salvato.getId(), salvato.getNome(), salvato.getCognome(), salvato.getIsAdmin());
+        return new AuthDTO.UtenteResponse(salvato.getId(), salvato.getTelefono(), salvato.getNome(),
+                salvato.getCognome(), salvato.getDataNascita(), salvato.getIsAdmin());
     }
 
     public AuthDTO.AuthResponse login(AuthDTO.LoginRequest request) {
