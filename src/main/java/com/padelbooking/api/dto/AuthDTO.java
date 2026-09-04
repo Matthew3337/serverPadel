@@ -113,18 +113,49 @@ public class AuthDTO {
         private Integer id;
         private String nome;
         private String cognome;
+        private String telefono;
+        private String password;
+        private LocalDate dataNascita;
         private Boolean isAdmin;
         private Double livello;
 
         public AuthResponse() {
         }
 
-        public AuthResponse(Integer id, String nome, String cognome, Boolean isAdmin, Double livello) {
+        public AuthResponse(Integer id, String nome, String cognome, String telefono, String password,
+                             LocalDate dataNascita, Boolean isAdmin, Double livello) {
             this.id = id;
             this.nome = nome;
             this.cognome = cognome;
+            this.telefono = telefono;
+            this.password = password;
+            this.dataNascita = dataNascita;
             this.isAdmin = isAdmin;
             this.livello = livello;
+        }
+
+        public String getTelefono() {
+            return telefono;
+        }
+
+        public void setTelefono(String telefono) {
+            this.telefono = telefono;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public LocalDate getDataNascita() {
+            return dataNascita;
+        }
+
+        public void setDataNascita(LocalDate dataNascita) {
+            this.dataNascita = dataNascita;
         }
 
         public Double getLivello() {

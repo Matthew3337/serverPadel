@@ -55,6 +55,7 @@ public class AuthService {
                 .orElseThrow(() -> new BusinessRuleException("Utente non trovato"));
 
         return new AuthDTO.AuthResponse(utente.getId(), utente.getNome(), utente.getCognome(),
+                utente.getTelefono(), utente.getPassword(), utente.getDataNascita(),
                 utente.getIsAdmin(), utente.getLivello());
     }
 }
