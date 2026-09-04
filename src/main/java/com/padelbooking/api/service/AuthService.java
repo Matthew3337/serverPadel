@@ -4,7 +4,6 @@ import com.padelbooking.api.dto.AuthDTO;
 import com.padelbooking.api.exception.BusinessRuleException;
 import com.padelbooking.api.model.Utente;
 import com.padelbooking.api.repository.UtenteRepository;
-import com.padelbooking.api.security.JwtUtil;
 import com.padelbooking.api.security.UtentePrincipal;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -17,16 +16,13 @@ public class AuthService {
     private final UtenteRepository utenteRepository;
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
-    private final JwtUtil jwtUtil;
 
     public AuthService(UtenteRepository utenteRepository,
                         PasswordEncoder passwordEncoder,
-                        AuthenticationManager authenticationManager,
-                        JwtUtil jwtUtil) {
+                        AuthenticationManager authenticationManager) {
         this.utenteRepository = utenteRepository;
         this.passwordEncoder = passwordEncoder;
         this.authenticationManager = authenticationManager;
-        this.jwtUtil = jwtUtil;
     }
 
     public AuthDTO.UtenteResponse register(AuthDTO.RegisterRequest request) {
@@ -58,8 +54,7 @@ public class AuthService {
         Utente utente = utenteRepository.findByTelefono(request.getTelefono())
                 .orElseThrow(() -> new BusinessRuleException("Utente non trovato"));
 
-        String token = jwtUtil.generateToken(utente.getId(), utente.getTelefono(), utente.getIsAdmin());
-
-        return new AuthDTO.AuthResponse(token, utente.getId(), utente.getNome(), utente.getCognome(), utente.getIsAdmin());
+        return new AuthDTO.AuthResponse(utente.getId(), utente.getNome(), utente.getCognome(),
+                utente.getIsAdmin(), utente.getLivello());
     }
 }

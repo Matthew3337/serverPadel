@@ -110,29 +110,29 @@ public class AuthDTO {
     }
 
     public static class AuthResponse {
-        private String token;
         private Integer id;
         private String nome;
         private String cognome;
         private Boolean isAdmin;
+        private Double livello;
 
         public AuthResponse() {
         }
 
-        public AuthResponse(String token, Integer id, String nome, String cognome, Boolean isAdmin) {
-            this.token = token;
+        public AuthResponse(Integer id, String nome, String cognome, Boolean isAdmin, Double livello) {
             this.id = id;
             this.nome = nome;
             this.cognome = cognome;
             this.isAdmin = isAdmin;
+            this.livello = livello;
         }
 
-        public String getToken() {
-            return token;
+        public Double getLivello() {
+            return livello;
         }
 
-        public void setToken(String token) {
-            this.token = token;
+        public void setLivello(Double livello) {
+            this.livello = livello;
         }
 
         public Integer getId() {
