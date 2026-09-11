@@ -28,7 +28,7 @@ L'utente admin inserito via seed ha come password l'hash placeholder presente ne
 - `GET /api/prenotazioni/slot-disponibili?idCampo=1&data=2026-07-10` — slot da 90 min liberi/occupati
 - `POST /api/prenotazioni` — crea una prenotazione
 - `DELETE /api/prenotazioni/{id}` — cancella (proprietario entro 24h, admin sempre)
-- `GET /api/prenotazioni/mie` — storico dell'utente autenticato
+- `GET /api/prenotazioni/prossima?telefono=3331234567` — prossima prenotazione di un utente, dato il telefono
 - `GET /api/prenotazioni/utente/{idUtente}` — storico di un utente specifico
 
 ## Esempio di body per creare una prenotazione

@@ -30,4 +30,20 @@ public interface PrenotazioneRepository extends JpaRepository<Prenotazione, Inte
             ORDER BY p.dataPrenotazione DESC, p.oraInizio DESC
             """)
     List<Prenotazione> findByGiocatoreId(@Param("utenteId") Integer utenteId);
+
+    // Prima prenotazione futura (rispetto a oggi/ora) di un utente identificato dal telefono,
+    // considerando l'utente in uno qualsiasi dei 4 slot giocatore.
+    @Query("""
+            SELECT p FROM Prenotazione p
+            WHERE (p.giocatore1.telefono = :telefono
+               OR p.giocatore2.telefono = :telefono
+               OR p.giocatore3.telefono = :telefono
+               OR p.giocatore4.telefono = :telefono)
+              AND (p.dataPrenotazione > :oggi
+                   OR (p.dataPrenotazione = :oggi AND p.oraInizio >= :oraAttuale))
+            ORDER BY p.dataPrenotazione ASC, p.oraInizio ASC
+            """)
+    List<Prenotazione> findProssimeByTelefono(@Param("telefono") String telefono,
+                                               @Param("oggi") LocalDate oggi,
+                                               @Param("oraAttuale") LocalTime oraAttuale);
 }

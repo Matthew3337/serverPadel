@@ -43,10 +43,11 @@ public class PrenotazioneController {
         return ResponseEntity.noContent().build();
     }
 
-    // Storico prenotazioni dell'utente autenticato
-    @GetMapping("/mie")
-    public ResponseEntity<List<PrenotazioneDTO.Response>> getMiePrenotazioni(@AuthenticationPrincipal UtentePrincipal principal) {
-        return ResponseEntity.ok(prenotazioneService.getByUtente(principal.getId()));
+    // Prossima prenotazione di un utente, identificato dal numero di telefono
+    // GET /api/prenotazioni/prossima?telefono=3331234567
+    @GetMapping("/prossima")
+    public ResponseEntity<PrenotazioneDTO.Response> getProssimaPrenotazione(@RequestParam String telefono) {
+        return ResponseEntity.ok(prenotazioneService.getProssimaByTelefono(telefono));
     }
 
     // Storico prenotazioni di un utente specifico (utile lato admin)

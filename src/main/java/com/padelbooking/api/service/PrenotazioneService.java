@@ -142,6 +142,26 @@ public class PrenotazioneService {
     }
 
     // ============================================
+    // Prossima prenotazione di un utente, dato il telefono
+    // ============================================
+    public PrenotazioneDTO.Response getProssimaByTelefono(String telefono) {
+        if (!utenteRepository.existsByTelefono(telefono)) {
+            throw new ResourceNotFoundException("Utente non trovato con telefono " + telefono);
+        }
+
+        LocalDate oggi = LocalDate.now();
+        LocalTime oraAttuale = LocalTime.now();
+
+        List<Prenotazione> prossime = prenotazioneRepository.findProssimeByTelefono(telefono, oggi, oraAttuale);
+
+        if (prossime.isEmpty()) {
+            throw new ResourceNotFoundException("Nessuna prenotazione futura trovata per il telefono " + telefono);
+        }
+
+        return toResponse(prossime.get(0));
+    }
+
+    // ============================================
     // Helper privati
     // ============================================
     private void validaSlotAllInternoOrarioApertura(Campo campo, LocalTime oraInizio, LocalTime oraFine) {
