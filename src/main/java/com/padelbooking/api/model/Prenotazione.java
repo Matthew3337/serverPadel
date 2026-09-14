@@ -18,19 +18,19 @@ public class Prenotazione {
     private Campo campo;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_giocatore1", nullable = false)
+    @JoinColumn(name = "telefono_giocatore1", referencedColumnName = "telefono", nullable = false)
     private Utente giocatore1;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_giocatore2")
+    @JoinColumn(name = "telefono_giocatore2", referencedColumnName = "telefono")
     private Utente giocatore2;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_giocatore3")
+    @JoinColumn(name = "telefono_giocatore3", referencedColumnName = "telefono")
     private Utente giocatore3;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_giocatore4")
+    @JoinColumn(name = "telefono_giocatore4", referencedColumnName = "telefono")
     private Utente giocatore4;
 
     @Column(name = "data_prenotazione", nullable = false)

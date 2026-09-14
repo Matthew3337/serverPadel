@@ -9,10 +9,7 @@ import java.time.LocalDate;
 public class Utente {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Integer id;
-
-    @Column(nullable = false, unique = true, length = 20)
+    @Column(nullable = false, length = 20)
     private String telefono;
 
     @Column(nullable = false, length = 50)
@@ -34,19 +31,11 @@ public class Utente {
     @Column(nullable = false)
     private Double livello = 0.0;
 
-    // Incrementato ad ogni login: permette di invalidare tutti i token precedenti
-    // di questo utente senza dover tenere una blacklist. Il token JWT porta con sé
-    // il valore letto al momento della sua generazione; se non coincide più con
-    // quello salvato sull'utente, il token viene considerato non valido.
-    @Column(name = "token_version", nullable = false)
-    private Integer tokenVersion = 0;
-
     public Utente() {
     }
 
-    public Utente(Integer id, String telefono, String nome, String cognome, String password,
+    public Utente(String telefono, String nome, String cognome, String password,
                   LocalDate dataNascita, Boolean isAdmin) {
-        this.id = id;
         this.telefono = telefono;
         this.nome = nome;
         this.cognome = cognome;
@@ -55,9 +44,8 @@ public class Utente {
         this.isAdmin = isAdmin;
     }
 
-    public Utente(Integer id, String telefono, String nome, String cognome, String password,
+    public Utente(String telefono, String nome, String cognome, String password,
                   LocalDate dataNascita, Boolean isAdmin, Double livello) {
-        this.id = id;
         this.telefono = telefono;
         this.nome = nome;
         this.cognome = cognome;
@@ -65,14 +53,6 @@ public class Utente {
         this.dataNascita = dataNascita;
         this.isAdmin = isAdmin;
         this.livello = livello;
-    }
-
-    public Integer getId() {
-        return id;
-    }
-
-    public void setId(Integer id) {
-        this.id = id;
     }
 
     public String getTelefono() {
@@ -131,11 +111,4 @@ public class Utente {
         this.livello = livello;
     }
 
-    public Integer getTokenVersion() {
-        return tokenVersion;
-    }
-
-    public void setTokenVersion(Integer tokenVersion) {
-        this.tokenVersion = tokenVersion;
-    }
 }

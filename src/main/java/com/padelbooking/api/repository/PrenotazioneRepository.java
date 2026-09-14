@@ -23,13 +23,13 @@ public interface PrenotazioneRepository extends JpaRepository<Prenotazione, Inte
     // Tutte le prenotazioni in cui l'utente compare, in uno qualsiasi dei 4 slot giocatore
     @Query("""
             SELECT p FROM Prenotazione p
-            WHERE p.giocatore1.id = :utenteId
-               OR p.giocatore2.id = :utenteId
-               OR p.giocatore3.id = :utenteId
-               OR p.giocatore4.id = :utenteId
+            WHERE p.giocatore1.telefono = :telefono
+               OR p.giocatore2.telefono = :telefono
+               OR p.giocatore3.telefono = :telefono
+               OR p.giocatore4.telefono = :telefono
             ORDER BY p.dataPrenotazione DESC, p.oraInizio DESC
             """)
-    List<Prenotazione> findByGiocatoreId(@Param("utenteId") Integer utenteId);
+    List<Prenotazione> findByGiocatoreTelefono(@Param("telefono") String telefono);
 
     // Prima prenotazione futura (rispetto a oggi/ora) di un utente identificato dal telefono,
     // considerando l'utente in uno qualsiasi dei 4 slot giocatore.

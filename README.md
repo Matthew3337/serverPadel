@@ -29,17 +29,17 @@ L'utente admin inserito via seed ha come password l'hash placeholder presente ne
 - `POST /api/prenotazioni` — crea una prenotazione
 - `DELETE /api/prenotazioni/{id}` — cancella (proprietario entro 24h, admin sempre)
 - `GET /api/prenotazioni/prossima?telefono=3331234567` — prossima prenotazione di un utente, dato il telefono
-- `GET /api/prenotazioni/utente/{idUtente}` — storico di un utente specifico
+- `GET /api/prenotazioni/utente/{telefono}` — storico di un utente specifico
 
 ## Esempio di body per creare una prenotazione
 
 ```json
 {
   "idCampo": 1,
-  "idGiocatore1": 2,
-  "idGiocatore2": 3,
-  "idGiocatore3": null,
-  "idGiocatore4": null,
+  "telefonoGiocatore1": "3331234567",
+  "telefonoGiocatore2": "3339876543",
+  "telefonoGiocatore3": null,
+  "telefonoGiocatore4": null,
   "dataPrenotazione": "2026-07-10",
   "oraInizio": "10:00:00"
 }
@@ -52,3 +52,9 @@ L'utente admin inserito via seed ha come password l'hash placeholder presente ne
 - `repository` → accesso ai dati via Spring Data JPA (equivalente ai DAO)
 - `dto` → oggetti di scambio con il client, le Entity non vengono mai esposte direttamente
 - `security` → JWT + Spring Security per autenticazione/autorizzazione
+
+## Chiave utente e JWT
+
+- `utente.telefono` è la chiave primaria. Le prenotazioni collegano i giocatori tramite `telefono_giocatore1` ... `telefono_giocatore4`.
+- Il JWT non contiene una scadenza né dati variabili: un nuovo login dello stesso utente restituisce lo stesso token, finché `JWT_SECRET` non viene cambiato.
+- Per trasformare un database già esistente eseguire [sql/2026-09-14_utente_telefono_primary_key.sql](sql/2026-09-14_utente_telefono_primary_key.sql), dopo un backup. Se il database non ha la colonna `token_version`, rimuovere dalla migrazione la sola istruzione che la elimina.

@@ -110,7 +110,6 @@ public class AuthDTO {
     }
 
     public static class AuthResponse {
-        private Integer id;
         private String nome;
         private String cognome;
         private String telefono;
@@ -122,9 +121,8 @@ public class AuthDTO {
         public AuthResponse() {
         }
 
-        public AuthResponse(Integer id, String nome, String cognome, String telefono,
+        public AuthResponse(String nome, String cognome, String telefono,
                              LocalDate dataNascita, Boolean isAdmin, Double livello, String token) {
-            this.id = id;
             this.nome = nome;
             this.cognome = cognome;
             this.telefono = telefono;
@@ -166,14 +164,6 @@ public class AuthDTO {
             this.livello = livello;
         }
 
-        public Integer getId() {
-            return id;
-        }
-
-        public void setId(Integer id) {
-            this.id = id;
-        }
-
         public String getNome() {
             return nome;
         }
@@ -200,7 +190,6 @@ public class AuthDTO {
     }
 
     public static class UtenteResponse {
-        private Integer id;
         private String telefono;
         private String nome;
         private String cognome;
@@ -210,22 +199,13 @@ public class AuthDTO {
         public UtenteResponse() {
         }
 
-        public UtenteResponse(Integer id, String telefono, String nome, String cognome,
+        public UtenteResponse(String telefono, String nome, String cognome,
                                LocalDate dataNascita, Boolean isAdmin) {
-            this.id = id;
             this.telefono = telefono;
             this.nome = nome;
             this.cognome = cognome;
             this.dataNascita = dataNascita;
             this.isAdmin = isAdmin;
-        }
-
-        public Integer getId() {
-            return id;
-        }
-
-        public void setId(Integer id) {
-            this.id = id;
         }
 
         public String getTelefono() {

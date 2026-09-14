@@ -5,7 +5,6 @@ import com.padelbooking.api.exception.BusinessRuleException;
 import com.padelbooking.api.model.Utente;
 import com.padelbooking.api.repository.UtenteRepository;
 import com.padelbooking.api.security.JwtUtil;
-import com.padelbooking.api.security.UtentePrincipal;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -44,7 +43,7 @@ public class AuthService {
 
         Utente salvato = utenteRepository.save(utente);
 
-        return new AuthDTO.UtenteResponse(salvato.getId(), salvato.getTelefono(), salvato.getNome(),
+        return new AuthDTO.UtenteResponse(salvato.getTelefono(), salvato.getNome(),
                 salvato.getCognome(), salvato.getDataNascita(), salvato.getIsAdmin());
     }
 
@@ -58,16 +57,9 @@ public class AuthService {
         Utente utente = utenteRepository.findByTelefono(request.getTelefono())
                 .orElseThrow(() -> new BusinessRuleException("Utente non trovato"));
 
-        // Ogni nuovo login invalida automaticamente tutti i token emessi in precedenza
-        // per questo utente, dato che JwtAuthFilter confronta la tokenVersion nel token
-        // con quella (aggiornata) salvata qui.
-        utente.setTokenVersion(utente.getTokenVersion() + 1);
-        utente = utenteRepository.save(utente);
+        String token = jwtUtil.generateToken(utente.getTelefono());
 
-        String token = jwtUtil.generateToken(utente.getId(), utente.getTelefono(), utente.getIsAdmin(),
-                utente.getTokenVersion());
-
-        return new AuthDTO.AuthResponse(utente.getId(), utente.getNome(), utente.getCognome(),
+        return new AuthDTO.AuthResponse(utente.getNome(), utente.getCognome(),
                 utente.getTelefono(), utente.getDataNascita(),
                 utente.getIsAdmin(), utente.getLivello(), token);
     }

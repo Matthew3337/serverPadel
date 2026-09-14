@@ -20,8 +20,8 @@ public class UtentePrincipal implements UserDetails {
         return utente;
     }
 
-    public Integer getId() {
-        return utente.getId();
+    public String getTelefono() {
+        return utente.getTelefono();
     }
 
     @Override

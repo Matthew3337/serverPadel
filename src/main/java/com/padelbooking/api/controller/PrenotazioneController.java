@@ -39,7 +39,7 @@ public class PrenotazioneController {
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> cancel(@PathVariable Integer id, @AuthenticationPrincipal UtentePrincipal principal) {
         boolean isAdmin = principal.getUtente().getIsAdmin();
-        prenotazioneService.cancel(id, principal.getId(), isAdmin);
+        prenotazioneService.cancel(id, principal.getTelefono(), isAdmin);
         return ResponseEntity.noContent().build();
     }
 
@@ -51,8 +51,8 @@ public class PrenotazioneController {
     }
 
     // Storico prenotazioni di un utente specifico (utile lato admin)
-    @GetMapping("/utente/{idUtente}")
-    public ResponseEntity<List<PrenotazioneDTO.Response>> getByUtente(@PathVariable Integer idUtente) {
-        return ResponseEntity.ok(prenotazioneService.getByUtente(idUtente));
+    @GetMapping("/utente/{telefono}")
+    public ResponseEntity<List<PrenotazioneDTO.Response>> getByUtente(@PathVariable String telefono) {
+        return ResponseEntity.ok(prenotazioneService.getByUtente(telefono));
     }
 }

@@ -95,10 +95,10 @@ public class PrenotazioneService {
 
         Prenotazione prenotazione = new Prenotazione();
         prenotazione.setCampo(campo);
-        prenotazione.setGiocatore1(trovaUtenteOLancia(request.getIdGiocatore1()));
-        prenotazione.setGiocatore2(trovaUtenteSeValorizzato(request.getIdGiocatore2()));
-        prenotazione.setGiocatore3(trovaUtenteSeValorizzato(request.getIdGiocatore3()));
-        prenotazione.setGiocatore4(trovaUtenteSeValorizzato(request.getIdGiocatore4()));
+        prenotazione.setGiocatore1(trovaUtenteOLancia(request.getTelefonoGiocatore1()));
+        prenotazione.setGiocatore2(trovaUtenteSeValorizzato(request.getTelefonoGiocatore2()));
+        prenotazione.setGiocatore3(trovaUtenteSeValorizzato(request.getTelefonoGiocatore3()));
+        prenotazione.setGiocatore4(trovaUtenteSeValorizzato(request.getTelefonoGiocatore4()));
         prenotazione.setDataPrenotazione(request.getDataPrenotazione());
         prenotazione.setOraInizio(oraInizio);
         prenotazione.setOraFine(oraFine);
@@ -110,11 +110,11 @@ public class PrenotazioneService {
     // ============================================
     // Cancellazione prenotazione
     // ============================================
-    public void cancel(Integer idPrenotazione, Integer idUtenteRichiedente, boolean isAdmin) {
+    public void cancel(Integer idPrenotazione, String telefonoUtenteRichiedente, boolean isAdmin) {
         Prenotazione prenotazione = prenotazioneRepository.findById(idPrenotazione)
                 .orElseThrow(() -> new ResourceNotFoundException("Prenotazione non trovata con id " + idPrenotazione));
 
-        boolean isProprietario = prenotazione.getGiocatore1().getId().equals(idUtenteRichiedente);
+        boolean isProprietario = prenotazione.getGiocatore1().getTelefono().equals(telefonoUtenteRichiedente);
         if (!isProprietario && !isAdmin) {
             throw new BusinessRuleException("Non hai i permessi per cancellare questa prenotazione");
         }
@@ -135,8 +135,11 @@ public class PrenotazioneService {
     // ============================================
     // Prenotazioni di un utente (storico)
     // ============================================
-    public List<PrenotazioneDTO.Response> getByUtente(Integer idUtente) {
-        return prenotazioneRepository.findByGiocatoreId(idUtente).stream()
+    public List<PrenotazioneDTO.Response> getByUtente(String telefono) {
+        if (!utenteRepository.existsByTelefono(telefono)) {
+            throw new ResourceNotFoundException("Utente non trovato con telefono " + telefono);
+        }
+        return prenotazioneRepository.findByGiocatoreTelefono(telefono).stream()
                 .map(this::toResponse)
                 .toList();
     }
@@ -221,13 +224,13 @@ public class PrenotazioneService {
         }
     }
 
-    private Utente trovaUtenteOLancia(Integer id) {
-        return utenteRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Utente non trovato con id " + id));
+    private Utente trovaUtenteOLancia(String telefono) {
+        return utenteRepository.findById(telefono)
+                .orElseThrow(() -> new ResourceNotFoundException("Utente non trovato con telefono " + telefono));
     }
 
-    private Utente trovaUtenteSeValorizzato(Integer id) {
-        return id == null ? null : trovaUtenteOLancia(id);
+    private Utente trovaUtenteSeValorizzato(String telefono) {
+        return telefono == null ? null : trovaUtenteOLancia(telefono);
     }
 
     private PrenotazioneDTO.Response toResponse(Prenotazione p) {
@@ -235,10 +238,10 @@ public class PrenotazioneService {
                 p.getId(),
                 p.getCampo().getId(),
                 p.getCampo().getNome(),
-                p.getGiocatore1().getId(),
-                p.getGiocatore2() != null ? p.getGiocatore2().getId() : null,
-                p.getGiocatore3() != null ? p.getGiocatore3().getId() : null,
-                p.getGiocatore4() != null ? p.getGiocatore4().getId() : null,
+                p.getGiocatore1().getTelefono(),
+                p.getGiocatore2() != null ? p.getGiocatore2().getTelefono() : null,
+                p.getGiocatore3() != null ? p.getGiocatore3().getTelefono() : null,
+                p.getGiocatore4() != null ? p.getGiocatore4().getTelefono() : null,
                 p.getDataPrenotazione(),
                 p.getOraInizio(),
                 p.getOraFine(),
