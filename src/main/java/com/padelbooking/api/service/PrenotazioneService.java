@@ -55,20 +55,20 @@ public class PrenotazioneService {
 
         List<PrenotazioneDTO.SlotResponse> slots = new ArrayList<>();
 
-        LocalTime cursore = campo.getOraApertura();
-        while (true) {
-            LocalTime fineSlot = cursore.plusMinutes(DURATA_SLOT_MINUTI);
+        // Lavoriamo per "minuti trascorsi dall'apertura" invece che per LocalTime assoluti:
+        // in questo modo il calcolo funziona anche quando il campo chiude dopo mezzanotte
+        // (es. apertura 18:00, chiusura 02:00), senza che il wrap-around delle 00:00 rompa il ciclo.
+        long minutiTotaliApertura = minutiDiAperturaTotali(campo);
+        long offset = 0;
 
-            // Se sommando 90 minuti si "supera la mezzanotte" tornando a un orario minore,
-            // oppure si supera l'orario di chiusura, ci fermiamo
-            if (fineSlot.isBefore(cursore) || fineSlot.isAfter(campo.getOraChiusura())) {
-                break;
-            }
+        while (offset + DURATA_SLOT_MINUTI <= minutiTotaliApertura) {
+            LocalTime inizioSlot = campo.getOraApertura().plusMinutes(offset);
+            LocalTime fineSlot = campo.getOraApertura().plusMinutes(offset + DURATA_SLOT_MINUTI);
 
-            boolean disponibile = !orariOccupati.contains(cursore);
-            slots.add(new PrenotazioneDTO.SlotResponse(cursore, fineSlot, disponibile));
+            boolean disponibile = !orariOccupati.contains(inizioSlot);
+            slots.add(new PrenotazioneDTO.SlotResponse(inizioSlot, fineSlot, disponibile));
 
-            cursore = fineSlot;
+            offset += DURATA_SLOT_MINUTI;
         }
 
         return slots;
@@ -83,7 +83,7 @@ public class PrenotazioneService {
         LocalTime oraInizio = request.getOraInizio();
         LocalTime oraFine = oraInizio.plusMinutes(DURATA_SLOT_MINUTI);
 
-        validaSlotAllInternoOrarioApertura(campo, oraInizio, oraFine);
+        validaSlotAllInternoOrarioApertura(campo, oraInizio);
         validaDataNonPassata(request.getDataPrenotazione(), oraInizio);
 
         boolean slotOccupato = prenotazioneRepository.existsByCampoIdAndDataPrenotazioneAndOraInizio(
@@ -164,14 +164,54 @@ public class PrenotazioneService {
     // ============================================
     // Helper privati
     // ============================================
-    private void validaSlotAllInternoOrarioApertura(Campo campo, LocalTime oraInizio, LocalTime oraFine) {
-        boolean fuoriOrario = oraInizio.isBefore(campo.getOraApertura())
-                || oraFine.isAfter(campo.getOraChiusura())
-                || oraFine.isBefore(oraInizio); // copre il caso di overflow oltre mezzanotte
+    private void validaSlotAllInternoOrarioApertura(Campo campo, LocalTime oraInizio) {
+        long minutiTotaliApertura = minutiDiAperturaTotali(campo);
+        long offsetInizio = minutiDaApertura(campo, oraInizio);
+
+        // Lo slot è valido solo se, partendo dall'apertura, sia l'inizio che la fine
+        // (inizio + durata) cadono entro il totale di minuti in cui il campo è aperto.
+        // Usare gli offset in minuti anziché confrontare direttamente i LocalTime evita
+        // il problema del wrap-around a mezzanotte per i campi che chiudono dopo le 00:00.
+        boolean fuoriOrario = offsetInizio + DURATA_SLOT_MINUTI > minutiTotaliApertura;
 
         if (fuoriOrario) {
             throw new BusinessRuleException("L'orario richiesto è fuori dalla fascia di apertura del campo");
         }
+    }
+
+    // ============================================
+    // Helper per la gestione degli orari con chiusura oltre mezzanotte
+    // ============================================
+
+    // Durata totale (in minuti) della fascia di apertura del campo, calcolata a partire
+    // dall'ora di apertura. Se la chiusura è "prima" dell'apertura in termini di orologio
+    // (es. apertura 18:00, chiusura 02:00), significa che il campo chiude il giorno dopo:
+    // in tal caso si somma il tratto fino a mezzanotte con quello dopo mezzanotte.
+    // Se apertura e chiusura coincidono, il campo è considerato aperto 24 ore su 24.
+    private long minutiDiAperturaTotali(Campo campo) {
+        long minutiApertura = campo.getOraApertura().toSecondOfDay() / 60L;
+        long minutiChiusura = campo.getOraChiusura().toSecondOfDay() / 60L;
+
+        if (minutiChiusura == minutiApertura) {
+            return 24 * 60L;
+        }
+        if (minutiChiusura > minutiApertura) {
+            return minutiChiusura - minutiApertura;
+        }
+        return (24 * 60L - minutiApertura) + minutiChiusura;
+    }
+
+    // Minuti trascorsi dall'apertura del campo fino all'orario indicato, gestendo
+    // correttamente il caso in cui tale orario sia "dopo mezzanotte" (quindi numericamente
+    // minore dell'ora di apertura, ma comunque successivo cronologicamente).
+    private long minutiDaApertura(Campo campo, LocalTime orario) {
+        long minutiApertura = campo.getOraApertura().toSecondOfDay() / 60L;
+        long minutiOrario = orario.toSecondOfDay() / 60L;
+
+        if (minutiOrario >= minutiApertura) {
+            return minutiOrario - minutiApertura;
+        }
+        return (24 * 60L - minutiApertura) + minutiOrario;
     }
 
     private void validaDataNonPassata(LocalDate data, LocalTime oraInizio) {
