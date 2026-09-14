@@ -117,12 +117,13 @@ public class AuthDTO {
         private LocalDate dataNascita;
         private Boolean isAdmin;
         private Double livello;
+        private String token;
 
         public AuthResponse() {
         }
 
         public AuthResponse(Integer id, String nome, String cognome, String telefono,
-                             LocalDate dataNascita, Boolean isAdmin, Double livello) {
+                             LocalDate dataNascita, Boolean isAdmin, Double livello, String token) {
             this.id = id;
             this.nome = nome;
             this.cognome = cognome;
@@ -130,6 +131,15 @@ public class AuthDTO {
             this.dataNascita = dataNascita;
             this.isAdmin = isAdmin;
             this.livello = livello;
+            this.token = token;
+        }
+
+        public String getToken() {
+            return token;
+        }
+
+        public void setToken(String token) {
+            this.token = token;
         }
 
         public String getTelefono() {
