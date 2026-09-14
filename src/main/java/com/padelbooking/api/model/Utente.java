@@ -34,6 +34,13 @@ public class Utente {
     @Column(nullable = false)
     private Double livello = 0.0;
 
+    // Incrementato ad ogni login: permette di invalidare tutti i token precedenti
+    // di questo utente senza dover tenere una blacklist. Il token JWT porta con sé
+    // il valore letto al momento della sua generazione; se non coincide più con
+    // quello salvato sull'utente, il token viene considerato non valido.
+    @Column(name = "token_version", nullable = false)
+    private Integer tokenVersion = 0;
+
     public Utente() {
     }
 
@@ -122,5 +129,13 @@ public class Utente {
 
     public void setLivello(Double livello) {
         this.livello = livello;
+    }
+
+    public Integer getTokenVersion() {
+        return tokenVersion;
+    }
+
+    public void setTokenVersion(Integer tokenVersion) {
+        this.tokenVersion = tokenVersion;
     }
 }

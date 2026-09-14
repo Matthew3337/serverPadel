@@ -58,7 +58,14 @@ public class AuthService {
         Utente utente = utenteRepository.findByTelefono(request.getTelefono())
                 .orElseThrow(() -> new BusinessRuleException("Utente non trovato"));
 
-        String token = jwtUtil.generateToken(utente.getId(), utente.getTelefono(), utente.getIsAdmin());
+        // Ogni nuovo login invalida automaticamente tutti i token emessi in precedenza
+        // per questo utente, dato che JwtAuthFilter confronta la tokenVersion nel token
+        // con quella (aggiornata) salvata qui.
+        utente.setTokenVersion(utente.getTokenVersion() + 1);
+        utente = utenteRepository.save(utente);
+
+        String token = jwtUtil.generateToken(utente.getId(), utente.getTelefono(), utente.getIsAdmin(),
+                utente.getTokenVersion());
 
         return new AuthDTO.AuthResponse(utente.getId(), utente.getNome(), utente.getCognome(),
                 utente.getTelefono(), utente.getDataNascita(),

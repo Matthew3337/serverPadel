@@ -23,7 +23,7 @@ public class JwtUtil {
         return Keys.hmacShaKeyFor(secret.getBytes());
     }
 
-    public String generateToken(Integer userId, String telefono, boolean isAdmin) {
+    public String generateToken(Integer userId, String telefono, boolean isAdmin, Integer tokenVersion) {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + expirationMs);
 
@@ -31,6 +31,7 @@ public class JwtUtil {
                 .subject(telefono)
                 .claim("userId", userId)
                 .claim("isAdmin", isAdmin)
+                .claim("tokenVersion", tokenVersion)
                 .issuedAt(now)
                 .expiration(expiry)
                 .signWith(getSigningKey())
@@ -46,9 +47,23 @@ public class JwtUtil {
         return claims.get("userId", Integer.class);
     }
 
-    public boolean isTokenValid(String token, String telefono) {
+    public Integer extractTokenVersion(String token) {
+        Claims claims = extractAllClaims(token);
+        return claims.get("tokenVersion", Integer.class);
+    }
+
+    // Il token è valido solo se: il telefono corrisponde, non è scaduto (limite tecnico,
+    // vedi jwt.expiration-ms) e la tokenVersion al suo interno coincide con quella
+    // attualmente salvata sull'utente. Quest'ultimo controllo è il vero meccanismo di
+    // invalidazione: ad ogni login la tokenVersion dell'utente viene incrementata, quindi
+    // tutti i token emessi in precedenza (con la vecchia versione) smettono di essere validi.
+    public boolean isTokenValid(String token, String telefono, Integer tokenVersionAttesa) {
         String telefonoNelToken = extractTelefono(token);
-        return telefonoNelToken.equals(telefono) && !isTokenExpired(token);
+        Integer tokenVersionNelToken = extractTokenVersion(token);
+
+        return telefonoNelToken.equals(telefono)
+                && tokenVersionAttesa.equals(tokenVersionNelToken)
+                && !isTokenExpired(token);
     }
 
     private boolean isTokenExpired(String token) {
