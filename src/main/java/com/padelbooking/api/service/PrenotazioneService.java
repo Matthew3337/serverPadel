@@ -16,8 +16,6 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 @Service
 public class PrenotazioneService {
@@ -49,9 +47,15 @@ public class PrenotazioneService {
         List<Prenotazione> prenotazioniEsistenti = prenotazioneRepository
                 .findByCampoIdAndDataPrenotazione(idCampo, data);
 
-        Set<LocalTime> orariOccupati = prenotazioniEsistenti.stream()
-                .map(Prenotazione::getOraInizio)
-                .collect(Collectors.toSet());
+        // Intervalli occupati espressi come [inizio, fine) in minuti trascorsi dall'apertura,
+        // così da poter confrontare le sovrapposizioni indipendentemente dal fatto che la
+        // prenotazione sia o meno allineata alla griglia degli slot generati sotto.
+        List<long[]> intervalliOccupati = prenotazioniEsistenti.stream()
+                .map(p -> {
+                    long inizio = minutiDaApertura(campo, p.getOraInizio());
+                    return new long[] { inizio, inizio + DURATA_SLOT_MINUTI };
+                })
+                .toList();
 
         List<PrenotazioneDTO.SlotResponse> slots = new ArrayList<>();
 
@@ -65,13 +69,23 @@ public class PrenotazioneService {
             LocalTime inizioSlot = campo.getOraApertura().plusMinutes(offset);
             LocalTime fineSlot = campo.getOraApertura().plusMinutes(offset + DURATA_SLOT_MINUTI);
 
-            boolean disponibile = !orariOccupati.contains(inizioSlot);
+            long slotInizio = offset;
+            long slotFine = offset + DURATA_SLOT_MINUTI;
+            boolean disponibile = intervalliOccupati.stream()
+                    .noneMatch(i -> siSovrappongono(i[0], i[1], slotInizio, slotFine));
+
             slots.add(new PrenotazioneDTO.SlotResponse(inizioSlot, fineSlot, disponibile));
 
             offset += DURATA_SLOT_MINUTI;
         }
 
         return slots;
+    }
+
+    // Due intervalli [aInizio, aFine) e [bInizio, bFine) si sovrappongono se ciascuno
+    // inizia prima che l'altro finisca.
+    private boolean siSovrappongono(long aInizio, long aFine, long bInizio, long bFine) {
+        return aInizio < bFine && bInizio < aFine;
     }
 
     // ============================================
@@ -86,8 +100,21 @@ public class PrenotazioneService {
         validaSlotAllInternoOrarioApertura(campo, oraInizio);
         validaDataNonPassata(request.getDataPrenotazione(), oraInizio);
 
-        boolean slotOccupato = prenotazioneRepository.existsByCampoIdAndDataPrenotazioneAndOraInizio(
-                request.getIdCampo(), request.getDataPrenotazione(), oraInizio);
+        // Controlliamo la sovrapposizione con qualsiasi prenotazione esistente sullo stesso
+        // campo/data, non solo l'uguaglianza esatta dell'ora di inizio: altrimenti due
+        // prenotazioni che si accavallano parzialmente (es. 18:00-19:30 e 18:30-20:00)
+        // potrebbero coesistere.
+        long nuovoInizioOffset = minutiDaApertura(campo, oraInizio);
+        long nuovoFineOffset = nuovoInizioOffset + DURATA_SLOT_MINUTI;
+
+        boolean slotOccupato = prenotazioneRepository
+                .findByCampoIdAndDataPrenotazione(request.getIdCampo(), request.getDataPrenotazione())
+                .stream()
+                .anyMatch(p -> {
+                    long inizioEsistente = minutiDaApertura(campo, p.getOraInizio());
+                    long fineEsistente = inizioEsistente + DURATA_SLOT_MINUTI;
+                    return siSovrappongono(inizioEsistente, fineEsistente, nuovoInizioOffset, nuovoFineOffset);
+                });
 
         if (slotOccupato) {
             throw new BusinessRuleException("Lo slot selezionato è già stato prenotato");
