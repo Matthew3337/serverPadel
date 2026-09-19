@@ -74,7 +74,7 @@ public class PrenotazioneService {
             boolean disponibile = intervalliOccupati.stream()
                     .noneMatch(i -> siSovrappongono(i[0], i[1], slotInizio, slotFine));
 
-            slots.add(new PrenotazioneDTO.SlotResponse(idCampo, inizioSlot, fineSlot, disponibile));
+            slots.add(new PrenotazioneDTO.SlotResponse(idCampo, campo.getNome(), inizioSlot, fineSlot, disponibile));
 
             offset += DURATA_SLOT_MINUTI;
         }

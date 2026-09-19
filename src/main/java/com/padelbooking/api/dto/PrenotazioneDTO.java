@@ -78,15 +78,18 @@ public class PrenotazioneDTO {
 
     public static class SlotResponse {
         private Integer idCampo;
+        private String nomeCampo;
         private LocalTime oraInizio;
         private LocalTime oraFine;
         private Boolean disponibile;
         public SlotResponse() { }
-        public SlotResponse(Integer idCampo, LocalTime oraInizio, LocalTime oraFine, Boolean disponibile) {
-            this.idCampo = idCampo; this.oraInizio = oraInizio; this.oraFine = oraFine; this.disponibile = disponibile;
+        public SlotResponse(Integer idCampo, String nomeCampo, LocalTime oraInizio, LocalTime oraFine, Boolean disponibile) {
+            this.idCampo = idCampo; this.nomeCampo = nomeCampo; this.oraInizio = oraInizio; this.oraFine = oraFine; this.disponibile = disponibile;
         }
         public Integer getIdCampo() { return idCampo; }
         public void setIdCampo(Integer value) { this.idCampo = value; }
+        public String getNomeCampo() { return nomeCampo; }
+        public void setNomeCampo(String value) { this.nomeCampo = value; }
         public LocalTime getOraInizio() { return oraInizio; }
         public void setOraInizio(LocalTime value) { this.oraInizio = value; }
         public LocalTime getOraFine() { return oraFine; }
