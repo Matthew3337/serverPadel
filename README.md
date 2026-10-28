@@ -5,7 +5,7 @@ Backend Spring Boot per l'app di prenotazione campi da padel.
 ## Setup
 
 1. Importa il progetto in STS: **File → Import → Maven → Existing Maven Projects**, seleziona questa cartella.
-2. Esegui gli script SQL già preparati (creazione tabelle + seed campi/admin) sul tuo database `padel_booking`.
+2. Crea il database eseguendo [sql/creazione_database.sql](sql/creazione_database.sql) su MySQL (crea `padel_booking` e le tabelle). Gli script datati in `sql/` servono solo a migrare database già esistenti.
 3. Apri `src/main/resources/application.properties` e verifica `spring.datasource.username` / `spring.datasource.password`.
 4. Avvia con **Run As → Spring Boot App**.
 
