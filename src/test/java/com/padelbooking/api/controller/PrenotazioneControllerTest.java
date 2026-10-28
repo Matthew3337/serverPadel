@@ -311,6 +311,55 @@ class PrenotazioneControllerTest {
     }
 
     // ============================================
+    // Errori 400 di parsing e parametri
+    // ============================================
+    @Test
+    void postJsonTroncatoE400() throws Exception {
+        assertErrore(postPrenotazione("{\"idCampo\":1,\"telefonoGiocatore1\":\"333"),
+                400, "Corpo della richiesta non valido: controlla che sia un JSON corretto");
+        verify(prenotazioneService, never()).create(any());
+    }
+
+    @Test
+    void postJsonTroncatoTraDueCampiE400() throws Exception {
+        assertErrore(postPrenotazione("{\"idCampo\":1,"),
+                400, "Corpo della richiesta non valido: controlla che sia un JSON corretto");
+        verify(prenotazioneService, never()).create(any());
+    }
+
+    @Test
+    void postDataInFormatoErratoE400() throws Exception {
+        String json = """
+                {"idCampo":1,"telefonoGiocatore1":"%s","dataPrenotazione":"31/10/2026","oraInizio":"10:00"}
+                """.formatted(TEL_1);
+        assertErrore(postPrenotazione(json), 400,
+                "Valore non valido per il campo dataPrenotazione (date nel formato AAAA-MM-GG, orari nel formato HH:MM o HH:MM:SS)");
+        verify(prenotazioneService, never()).create(any());
+    }
+
+    @Test
+    void prossimaSenzaTelefonoE400() throws Exception {
+        assertErrore(mockMvc.perform(get("/api/prenotazioni/prossima").with(user(principal(TEL_1, false)))),
+                400, "Parametro obbligatorio mancante: telefono");
+        verify(prenotazioneService, never()).getProssimaByTelefono(anyString());
+    }
+
+    @Test
+    void slotDisponibiliConIdCampoNonNumericoE400() throws Exception {
+        assertErrore(mockMvc.perform(get("/api/prenotazioni/slot-disponibili").param("idCampo", "abc")
+                        .param("data", "2030-07-10").with(user(principal(TEL_1, false)))),
+                400, "Valore non valido per il parametro idCampo");
+        verify(prenotazioneService, never()).getSlotDisponibili(any(), any());
+    }
+
+    @Test
+    void deleteConIdNonNumericoE400() throws Exception {
+        assertErrore(mockMvc.perform(delete("/api/prenotazioni/abc").with(user(principal(TEL_1, false)))),
+                400, "Valore non valido per il parametro id");
+        verify(prenotazioneService, never()).cancel(any(), anyString(), anyBoolean());
+    }
+
+    // ============================================
     // Helper
     // ============================================
     private ResultActions postPrenotazione(String json) throws Exception {

@@ -772,6 +772,245 @@ class PrenotazioneServiceTest {
     }
 
     // ============================================
+    // Inizio effettivo (data_partita = data della serata)
+    // ============================================
+    // Il service usa LocalDateTime.now() senza Clock: i casi sono costruiti con date relative
+    // ad adesso e con orari scelti perché l'esito non dipenda dall'ora in cui girano i test.
+    @Nested
+    class InizioEffettivo {
+
+        private Campo serale;
+        private LocalDate oggi;
+
+        @BeforeEach
+        void setUpSerale() {
+            serale = new Campo(2, "Campo Serale", false, LocalTime.of(18, 0), LocalTime.of(2, 0));
+            oggi = LocalDate.now();
+        }
+
+        // --- POST ---
+
+        @Test
+        void postAlle0030DellaSerataDiOggiEAccettataAncheDopoLe0030DiOggi() {
+            // Inizio reale = domani 00:30, sempre nel futuro. Con il vecchio calcolo (oggi 00:30)
+            // veniva rifiutata ogni volta che i test giravano dopo le 00:30.
+            when(campoService.trovaCampoOLancia(2)).thenReturn(serale);
+            when(partitaRepository.findByCampoIdAndDataPartitaAndStatoNot(2, oggi, StatoPartita.ANNULLATA))
+                    .thenReturn(List.of());
+            stubUtenti(TEL_1);
+            org.mockito.Mockito.lenient().when(partitaRepository.save(any(Partita.class)))
+                    .thenAnswer(inv -> inv.getArgument(0));
+            PrenotazioneDTO.CreateRequest req = richiesta(oggi, LocalTime.of(0, 30), null, TEL_1, null, null, null);
+            req.setIdCampo(2);
+
+            PrenotazioneDTO.Response r = service.create(req);
+
+            assertThat(r.getDataPrenotazione()).isEqualTo(oggi);
+            assertThat(r.getOraInizio()).isEqualTo(LocalTime.of(0, 30));
+            assertThat(catturaPartitaSalvata().getDataPartita()).isEqualTo(oggi);
+        }
+
+        @Test
+        void postDopoMezzanotteDellaSerataDiIeriGiaPassataDa409() {
+            // Serata di ieri, slot 00:00: inizio reale = oggi 00:00, già passato a qualunque ora.
+            // Si usa 00:00 invece di 00:30 perché tra le 00:00 e le 00:30 lo slot delle 00:30
+            // sarebbe ancora futuro e il test diventerebbe instabile.
+            when(campoService.trovaCampoOLancia(2)).thenReturn(serale);
+            PrenotazioneDTO.CreateRequest req = richiesta(oggi.minusDays(1), LocalTime.of(0, 0), null, TEL_1, null, null, null);
+            req.setIdCampo(2);
+
+            assertThatThrownBy(() -> service.create(req))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Non è possibile prenotare uno slot nel passato");
+            verify(partitaRepository, never()).save(any());
+        }
+
+        @Test
+        void postCampoNormaleNelPassatoResta409() {
+            stubCampo(campoDiurno);
+
+            assertThatThrownBy(() -> service.create(richiesta(oggi.minusDays(1), LocalTime.of(20, 30), null, TEL_1, null, null, null)))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Non è possibile prenotare uno slot nel passato");
+        }
+
+        // --- cancel ---
+
+        @Test
+        void cancelSottoLe24OreSullInizioRealeDa409() {
+            // inizio reale tra ~23h30: data_partita è il giorno prima dell'inizio reale
+            Partita p = partitaDopoMezzanotteCheIniziaTra(23 * 60 + 30);
+            when(partitaRepository.findById(5)).thenReturn(Optional.of(p));
+
+            assertThatThrownBy(() -> service.cancel(5, TEL_1, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Non è possibile cancellare una prenotazione a meno di 24 ore dall'inizio");
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+        }
+
+        @Test
+        void cancelAppenaSopraLe24OreSullInizioRealeRiesce() {
+            // inizio reale tra ~24h30, ma data_partita + ora è solo ~30 minuti da adesso:
+            // con il vecchio calcolo sarebbe stata rifiutata
+            Partita p = partitaDopoMezzanotteCheIniziaTra(24 * 60 + 30);
+            assertThat(LocalDateTime.of(p.getDataPartita(), p.getOraInizio())).isBefore(LocalDateTime.now().plusHours(1));
+            when(partitaRepository.findById(5)).thenReturn(Optional.of(p));
+
+            service.cancel(5, TEL_1, false);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.ANNULLATA);
+        }
+
+        @Test
+        void cancelBenOltreLe24OreSullInizioRealeRiesce() {
+            // Campo 18:00-02:00, serata di domani, slot 00:30: inizio reale dopodomani 00:30,
+            // quindi tra 24h30 e 48h30 a qualunque ora
+            Partita p = partita(5, serale, utente(TEL_1), oggi.plusDays(1), LocalTime.of(0, 30), StatoPartita.CREATA);
+            when(partitaRepository.findById(5)).thenReturn(Optional.of(p));
+
+            service.cancel(5, TEL_1, false);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.ANNULLATA);
+        }
+
+        @Test
+        void cancelCampoNormaleNonSpostaIlGiorno() {
+            // Campo 08:00-22:00 con data/ora del giorno stesso tra ~23h30: resta sotto le 24 ore
+            LocalDateTime inizio = LocalDateTime.now().plusMinutes(23 * 60 + 30);
+            Partita p = partita(5, campoDiurno, utente(TEL_1), inizio.toLocalDate(), inizio.toLocalTime(), StatoPartita.CREATA);
+            when(partitaRepository.findById(5)).thenReturn(Optional.of(p));
+
+            assertThatThrownBy(() -> service.cancel(5, TEL_1, false))
+                    .isInstanceOf(BusinessRuleException.class);
+        }
+
+        // --- prossima ---
+
+        @Test
+        void prossimaCaricaLeCandidateDaIeriAlle0000() {
+            when(utenteRepository.existsByTelefono(TEL_1)).thenReturn(true);
+            LocalDate ieriPrima = LocalDate.now().minusDays(1);
+            stubProssime(List.of(partitaUtente(1, serale, oggi, LocalTime.of(0, 30))));
+
+            service.getProssimaByTelefono(TEL_1);
+
+            ArgumentCaptor<LocalDate> data = ArgumentCaptor.forClass(LocalDate.class);
+            ArgumentCaptor<LocalTime> ora = ArgumentCaptor.forClass(LocalTime.class);
+            verify(partitaRepository).findProssimeByPartecipanteTelefono(eq(TEL_1), eq(TipoPartecipazione.UTENTE),
+                    eq(StatoPartita.ANNULLATA), data.capture(), ora.capture());
+            assertThat(data.getValue()).isIn(ieriPrima, LocalDate.now().minusDays(1));
+            assertThat(ora.getValue()).isEqualTo(LocalTime.MIN);
+        }
+
+        @Test
+        void prossimaConsideraFuturaLaPartitaDelle0030DiStasera() {
+            when(utenteRepository.existsByTelefono(TEL_1)).thenReturn(true);
+            // ieri 00:00 della serata di ieri (inizio reale oggi 00:00): già passata
+            Partita passata = partitaUtente(1, serale, oggi.minusDays(1), LocalTime.of(0, 0));
+            // serata di oggi, 00:30: inizio reale domani 00:30
+            Partita stasera = partitaUtente(2, serale, oggi, LocalTime.of(0, 30));
+            stubProssime(List.of(passata, stasera));
+
+            assertThat(service.getProssimaByTelefono(TEL_1).getId()).isEqualTo(2);
+        }
+
+        @Test
+        void prossimaEscludeLaPartitaDopoMezzanotteDiIeriSeraGiaPassata() {
+            when(utenteRepository.existsByTelefono(TEL_1)).thenReturn(true);
+            // vale lo stesso discorso di stabilità del test POST: 00:00 invece di 00:30
+            stubProssime(List.of(partitaUtente(1, serale, oggi.minusDays(1), LocalTime.of(0, 0))));
+
+            assertThatThrownBy(() -> service.getProssimaByTelefono(TEL_1))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Nessuna prenotazione futura trovata per il telefono " + TEL_1);
+        }
+
+        @Test
+        void prossimaFra0030E2100DellaStessaSerataVinceLe2100() {
+            when(utenteRepository.existsByTelefono(TEL_1)).thenReturn(true);
+            LocalDate domaniSera = oggi.plusDays(1);
+            // ordine della query (data_partita, ora_inizio ASC): la 00:30 arriva prima della 21:00
+            Partita dopoMezzanotte = partitaUtente(1, serale, domaniSera, LocalTime.of(0, 30));
+            Partita alle21 = partitaUtente(2, serale, domaniSera, LocalTime.of(21, 0));
+            stubProssime(List.of(dopoMezzanotte, alle21));
+
+            assertThat(service.getProssimaByTelefono(TEL_1).getId()).isEqualTo(2);
+        }
+
+        @Test
+        void prossimaCampoNormaleSceglieLaPrimaFutura() {
+            when(utenteRepository.existsByTelefono(TEL_1)).thenReturn(true);
+            Partita ieri = partitaUtente(1, campoDiurno, oggi.minusDays(1), LocalTime.of(10, 0));
+            Partita domani = partitaUtente(2, campoDiurno, oggi.plusDays(1), LocalTime.of(8, 0));
+            Partita dopodomani = partitaUtente(3, campoDiurno, oggi.plusDays(2), LocalTime.of(8, 0));
+            stubProssime(List.of(ieri, domani, dopodomani));
+
+            assertThat(service.getProssimaByTelefono(TEL_1).getId()).isEqualTo(2);
+        }
+
+        // --- storico ---
+
+        @Test
+        void storicoOrdinatoPerInizioRealeDecrescente() {
+            when(utenteRepository.existsByTelefono(TEL_1)).thenReturn(true);
+            LocalDate d = oggi.minusDays(3);
+            Partita alle21 = partitaUtente(1, serale, d, LocalTime.of(21, 0));
+            Partita alle23 = partitaUtente(2, serale, d, LocalTime.of(23, 0));
+            Partita alle0030 = partitaUtente(3, serale, d, LocalTime.of(0, 30));
+            Partita seraPrima = partitaUtente(4, serale, d.minusDays(1), LocalTime.of(0, 0));
+            // ordine della query (data_partita DESC, ora_inizio DESC)
+            when(partitaRepository.findByPartecipanteTelefono(TEL_1, TipoPartecipazione.UTENTE, StatoPartita.ANNULLATA))
+                    .thenReturn(List.of(alle23, alle21, alle0030, seraPrima));
+
+            assertThat(service.getByUtente(TEL_1)).extracting(PrenotazioneDTO.Response::getId)
+                    .containsExactly(3, 2, 1, 4);
+        }
+
+        @Test
+        void storicoCampoNormaleOrdinatoPerDataEOraDecrescenti() {
+            when(utenteRepository.existsByTelefono(TEL_1)).thenReturn(true);
+            Partita a = partitaUtente(1, campoDiurno, oggi.minusDays(2), LocalTime.of(8, 0));
+            Partita b = partitaUtente(2, campoDiurno, oggi.minusDays(2), LocalTime.of(20, 0));
+            Partita c = partitaUtente(3, campoDiurno, oggi.minusDays(1), LocalTime.of(9, 30));
+            when(partitaRepository.findByPartecipanteTelefono(TEL_1, TipoPartecipazione.UTENTE, StatoPartita.ANNULLATA))
+                    .thenReturn(List.of(a, c, b));
+
+            assertThat(service.getByUtente(TEL_1)).extracting(PrenotazioneDTO.Response::getId)
+                    .containsExactly(3, 2, 1);
+        }
+
+        // --- helper ---
+
+        private void stubProssime(List<Partita> candidate) {
+            when(partitaRepository.findProssimeByPartecipanteTelefono(eq(TEL_1), eq(TipoPartecipazione.UTENTE),
+                    eq(StatoPartita.ANNULLATA), any(LocalDate.class), any(LocalTime.class))).thenReturn(candidate);
+        }
+
+        private Partita partitaUtente(Integer id, Campo campo, LocalDate data, LocalTime inizio) {
+            Partita p = partita(id, campo, utente(TEL_1), data, inizio, StatoPartita.CREATA);
+            p.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, utente(TEL_1), false, false));
+            return p;
+        }
+
+        // Partita "dopo mezzanotte" del creatore TEL_1 con inizio reale tra circa i minuti indicati
+        // (arrotondato per difetto al minuto). Per poter scegliere l'istante liberamente si usa un campo
+        // aperto 24 ore con apertura = chiusura = 23:59: ogni orario prima delle 23:59 appartiene
+        // alla parte dopo mezzanotte, quindi data_partita è il giorno prima dell'inizio reale.
+        private Partita partitaDopoMezzanotteCheIniziaTra(long minuti) {
+            LocalDateTime inizioReale = LocalDateTime.now().plusMinutes(minuti).withSecond(0).withNano(0);
+            if (!inizioReale.toLocalTime().isBefore(LocalTime.of(23, 59))) {
+                // 23:59 non è "prima dell'apertura": si anticipa di un minuto, le ore intere non cambiano
+                inizioReale = inizioReale.minusMinutes(1);
+            }
+            Campo h24 = new Campo(3, "Campo H24", true, LocalTime.of(23, 59), LocalTime.of(23, 59));
+            Partita p = partita(5, h24, utente(TEL_1), inizioReale.toLocalDate().minusDays(1),
+                    inizioReale.toLocalTime(), StatoPartita.CREATA);
+            p.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, utente(TEL_1), false, false));
+            return p;
+        }
+    }
+
+    // ============================================
     // Helper
     // ============================================
     private void stubCampo(Campo campo) {
