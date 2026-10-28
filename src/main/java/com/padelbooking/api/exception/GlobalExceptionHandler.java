@@ -1,5 +1,6 @@
 package com.padelbooking.api.exception;
 
+import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -73,8 +74,13 @@ public class GlobalExceptionHandler {
     }
 
     // Percorso del campo che Jackson non è riuscito a leggere (es. "dataPrenotazione"),
-    // null se il problema è la sintassi del JSON e non un campo specifico
+    // null se il problema è la sintassi del JSON e non un campo specifico.
+    // Un JSON troncato dentro un valore arriva come JsonMappingException con il percorso del campo,
+    // ma la causa è un errore di sintassi: in quel caso il nome del campo trarrebbe in inganno.
     private String nomeCampoJson(Throwable causa) {
+        if (contieneErroreDiSintassi(causa)) {
+            return null;
+        }
         if (!(causa instanceof JsonMappingException mappingEx) || mappingEx.getPath().isEmpty()) {
             return null;
         }
@@ -82,6 +88,16 @@ public class GlobalExceptionHandler {
                 .map(rif -> rif.getFieldName() != null ? rif.getFieldName() : "[" + rif.getIndex() + "]")
                 .collect(Collectors.joining("."));
         return percorso.isEmpty() ? null : percorso;
+    }
+
+    // JsonParseException comprende anche JsonEOFException (body troncato)
+    private boolean contieneErroreDiSintassi(Throwable ex) {
+        for (Throwable causa = ex; causa != null; causa = causa.getCause()) {
+            if (causa instanceof JsonParseException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status, String message) {
