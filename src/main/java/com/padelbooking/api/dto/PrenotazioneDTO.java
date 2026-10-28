@@ -2,6 +2,7 @@ package com.padelbooking.api.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import java.time.LocalDate;
 import java.time.LocalTime;
 
@@ -14,6 +15,9 @@ public class PrenotazioneDTO {
         private String telefonoGiocatore4;
         @NotNull(message = "La data è obbligatoria") private LocalDate dataPrenotazione;
         @NotNull(message = "L'ora di inizio è obbligatoria") private LocalTime oraInizio;
+        // Facoltativo per compatibilità con i client che non lo inviano: se assente la partita è PRIVATA.
+        // Stringa e non enum, così un valore errato dà 400 con messaggio invece di un errore di parsing.
+        @Pattern(regexp = "PUBBLICA|PRIVATA", message = "Il tipo deve essere PUBBLICA o PRIVATA") private String tipo;
         public CreateRequest() { }
         public Integer getIdCampo() { return idCampo; }
         public void setIdCampo(Integer idCampo) { this.idCampo = idCampo; }
@@ -29,6 +33,8 @@ public class PrenotazioneDTO {
         public void setDataPrenotazione(LocalDate value) { this.dataPrenotazione = value; }
         public LocalTime getOraInizio() { return oraInizio; }
         public void setOraInizio(LocalTime value) { this.oraInizio = value; }
+        public String getTipo() { return tipo; }
+        public void setTipo(String value) { this.tipo = value; }
     }
 
     public static class Response {
