@@ -32,8 +32,11 @@ public interface PartitaRepository extends JpaRepository<Partita, Integer> {
                                               @Param("tipoUtente") TipoPartecipazione tipoUtente,
                                               @Param("statoEscluso") StatoPartita statoEscluso);
 
-    // Partite future (rispetto a oggi/ora) in cui l'utente occupa un posto come UTENTE,
-    // escluse quelle con lo stato indicato, dalla più vicina.
+    // Partite in cui l'utente occupa un posto come UTENTE, escluse quelle con lo stato indicato,
+    // a partire da una data e un'ora confrontate con data_partita e ora_inizio.
+    // data_partita è la data della serata, quindi questo filtro non coincide con l'istante reale
+    // per le partite dopo mezzanotte: il service lo usa solo per restringere le candidate
+    // e poi filtra e ordina sull'inizio effettivo.
     @Query("""
             SELECT p FROM Partita p
             WHERE p.stato <> :statoEscluso
@@ -41,13 +44,13 @@ public interface PartitaRepository extends JpaRepository<Partita, Integer> {
                           WHERE pa.partita = p
                             AND pa.tipo = :tipoUtente
                             AND pa.utente.telefono = :telefono)
-              AND (p.dataPartita > :oggi
-                   OR (p.dataPartita = :oggi AND p.oraInizio >= :oraAttuale))
+              AND (p.dataPartita > :dataDa
+                   OR (p.dataPartita = :dataDa AND p.oraInizio >= :oraDa))
             ORDER BY p.dataPartita ASC, p.oraInizio ASC
             """)
     List<Partita> findProssimeByPartecipanteTelefono(@Param("telefono") String telefono,
                                                       @Param("tipoUtente") TipoPartecipazione tipoUtente,
                                                       @Param("statoEscluso") StatoPartita statoEscluso,
-                                                      @Param("oggi") LocalDate oggi,
-                                                      @Param("oraAttuale") LocalTime oraAttuale);
+                                                      @Param("dataDa") LocalDate dataDa,
+                                                      @Param("oraDa") LocalTime oraDa);
 }
