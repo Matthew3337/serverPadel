@@ -7,3 +7,7 @@ target/
 .settings/
 .factorypath
 *.log
+
+# Gradle
+.gradle/
+build/
