@@ -4,18 +4,29 @@ import com.padelbooking.api.dto.PrenotazioneDTO;
 import com.padelbooking.api.exception.BusinessRuleException;
 import com.padelbooking.api.exception.ResourceNotFoundException;
 import com.padelbooking.api.model.Campo;
-import com.padelbooking.api.model.Prenotazione;
+import com.padelbooking.api.model.Partecipazione;
+import com.padelbooking.api.model.Partita;
+import com.padelbooking.api.model.StatoPartita;
+import com.padelbooking.api.model.TipoPartecipazione;
+import com.padelbooking.api.model.TipoPartita;
 import com.padelbooking.api.model.Utente;
-import com.padelbooking.api.repository.PrenotazioneRepository;
+import com.padelbooking.api.repository.PartitaRepository;
 import com.padelbooking.api.repository.UtenteRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Set;
 
 @Service
 public class PrenotazioneService {
@@ -26,14 +37,22 @@ public class PrenotazioneService {
     // Quanto tempo prima si può ancora cancellare una prenotazione
     private static final int LIMITE_CANCELLAZIONE_ORE = 24;
 
-    private final PrenotazioneRepository prenotazioneRepository;
+    // Tipo usato quando il client non lo indica (i client esistenti non inviano il campo)
+    private static final TipoPartita TIPO_PARTITA_PREDEFINITO = TipoPartita.PRIVATA;
+
+    // Nome del vincolo unico che impedisce due partite attive sullo stesso slot
+    private static final String VINCOLO_SLOT_UNICO = "uk_partita_slot";
+
+    private static final String MESSAGGIO_SLOT_OCCUPATO = "Lo slot selezionato è già stato prenotato";
+
+    private final PartitaRepository partitaRepository;
     private final UtenteRepository utenteRepository;
     private final CampoService campoService;
 
-    public PrenotazioneService(PrenotazioneRepository prenotazioneRepository,
+    public PrenotazioneService(PartitaRepository partitaRepository,
                                 UtenteRepository utenteRepository,
                                 CampoService campoService) {
-        this.prenotazioneRepository = prenotazioneRepository;
+        this.partitaRepository = partitaRepository;
         this.utenteRepository = utenteRepository;
         this.campoService = campoService;
     }
@@ -44,8 +63,7 @@ public class PrenotazioneService {
     public List<PrenotazioneDTO.SlotResponse> getSlotDisponibili(Integer idCampo, LocalDate data) {
         Campo campo = campoService.trovaCampoOLancia(idCampo);
 
-        List<Prenotazione> prenotazioniEsistenti = prenotazioneRepository
-                .findByCampoIdAndDataPrenotazione(idCampo, data);
+        List<Partita> prenotazioniEsistenti = trovaPartiteAttive(idCampo, data);
 
         // Intervalli occupati espressi come [inizio, fine) in minuti trascorsi dall'apertura,
         // così da poter confrontare le sovrapposizioni indipendentemente dal fatto che la
@@ -98,17 +116,16 @@ public class PrenotazioneService {
         LocalTime oraFine = oraInizio.plusMinutes(DURATA_SLOT_MINUTI);
 
         validaSlotAllInternoOrarioApertura(campo, oraInizio);
-        validaDataNonPassata(request.getDataPrenotazione(), oraInizio);
+        validaDataNonPassata(campo, request.getDataPrenotazione(), oraInizio);
 
-        // Controlliamo la sovrapposizione con qualsiasi prenotazione esistente sullo stesso
+        // Controlliamo la sovrapposizione con qualsiasi partita attiva sullo stesso
         // campo/data, non solo l'uguaglianza esatta dell'ora di inizio: altrimenti due
         // prenotazioni che si accavallano parzialmente (es. 18:00-19:30 e 18:30-20:00)
         // potrebbero coesistere.
         long nuovoInizioOffset = minutiDaApertura(campo, oraInizio);
         long nuovoFineOffset = nuovoInizioOffset + DURATA_SLOT_MINUTI;
 
-        boolean slotOccupato = prenotazioneRepository
-                .findByCampoIdAndDataPrenotazione(request.getIdCampo(), request.getDataPrenotazione())
+        boolean slotOccupato = trovaPartiteAttive(request.getIdCampo(), request.getDataPrenotazione())
                 .stream()
                 .anyMatch(p -> {
                     long inizioEsistente = minutiDaApertura(campo, p.getOraInizio());
@@ -117,36 +134,65 @@ public class PrenotazioneService {
                 });
 
         if (slotOccupato) {
-            throw new BusinessRuleException("Lo slot selezionato è già stato prenotato");
+            throw new BusinessRuleException(MESSAGGIO_SLOT_OCCUPATO);
         }
 
-        Prenotazione prenotazione = new Prenotazione();
-        prenotazione.setCampo(campo);
-        prenotazione.setGiocatore1(trovaUtenteOLancia(request.getTelefonoGiocatore1()));
-        prenotazione.setGiocatore2(trovaUtenteSeValorizzato(request.getTelefonoGiocatore2()));
-        prenotazione.setGiocatore3(trovaUtenteSeValorizzato(request.getTelefonoGiocatore3()));
-        prenotazione.setGiocatore4(trovaUtenteSeValorizzato(request.getTelefonoGiocatore4()));
-        prenotazione.setDataPrenotazione(request.getDataPrenotazione());
-        prenotazione.setOraInizio(oraInizio);
-        prenotazione.setOraFine(oraFine);
+        List<Utente> giocatori = trovaGiocatori(request);
 
-        Prenotazione salvata = prenotazioneRepository.save(prenotazione);
+        Partita partita = new Partita();
+        partita.setCampo(campo);
+        partita.setCreatore(giocatori.get(0));
+        partita.setDataPartita(request.getDataPrenotazione());
+        partita.setOraInizio(oraInizio);
+        partita.setOraFine(oraFine);
+        partita.setTipo(request.getTipo() != null ? TipoPartita.valueOf(request.getTipo()) : TIPO_PARTITA_PREDEFINITO);
+        partita.setStato(StatoPartita.CREATA);
+
+        // I giocatori indicati nella richiesta entrano direttamente nella partita:
+        // non sono inviti da accettare, per questo invitato = false
+        for (Utente giocatore : giocatori) {
+            partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, giocatore, false, false));
+        }
+
+        Partita salvata;
+        try {
+            salvata = partitaRepository.save(partita);
+        } catch (DataIntegrityViolationException ex) {
+            // Il controllo di sovrapposizione sopra non basta con richieste simultanee:
+            // in quel caso è il vincolo unico sul DB a rifiutare la seconda partita.
+            if (violaVincolo(ex, VINCOLO_SLOT_UNICO)) {
+                throw new BusinessRuleException(MESSAGGIO_SLOT_OCCUPATO);
+            }
+            throw ex;
+        }
         return toResponse(salvata);
     }
 
     // ============================================
     // Cancellazione prenotazione
     // ============================================
+    @Transactional
     public void cancel(Integer idPrenotazione, String telefonoUtenteRichiedente, boolean isAdmin) {
-        Prenotazione prenotazione = prenotazioneRepository.findById(idPrenotazione)
+        Partita partita = partitaRepository.findById(idPrenotazione)
                 .orElseThrow(() -> new ResourceNotFoundException("Prenotazione non trovata con id " + idPrenotazione));
 
-        boolean isProprietario = prenotazione.getGiocatore1().getTelefono().equals(telefonoUtenteRichiedente);
+        boolean isProprietario = partita.getCreatore().getTelefono().equals(telefonoUtenteRichiedente);
         if (!isProprietario && !isAdmin) {
             throw new BusinessRuleException("Non hai i permessi per cancellare questa prenotazione");
         }
 
-        LocalDateTime inizioPrenotazione = LocalDateTime.of(prenotazione.getDataPrenotazione(), prenotazione.getOraInizio());
+        if (partita.getStato() == StatoPartita.ANNULLATA) {
+            throw new BusinessRuleException("La prenotazione è già stata annullata");
+        }
+
+        // Una partita giocata ha (o avrà) un risultato e dei punti assegnati: non si annulla, neanche da admin
+        if (partita.getStato() == StatoPartita.GIOCATA) {
+            throw new BusinessRuleException("Non è possibile annullare una partita già giocata");
+        }
+
+        // Istante reale, non data_partita + ora: una partita delle 00:30 della serata di sabato
+        // inizia domenica, e le 24 ore vanno contate fino a lì
+        LocalDateTime inizioPrenotazione = inizioEffettivo(partita);
         long oreRimanenti = Duration.between(LocalDateTime.now(), inizioPrenotazione).toHours();
 
         if (!isAdmin && oreRimanenti < LIMITE_CANCELLAZIONE_ORE) {
@@ -154,19 +200,25 @@ public class PrenotazioneService {
                     "Non è possibile cancellare una prenotazione a meno di " + LIMITE_CANCELLAZIONE_ORE + " ore dall'inizio");
         }
 
-        // Non esiste una colonna "stato" nello schema: cancellare significa
-        // rimuovere fisicamente la riga dalla tabella prenotazione.
-        prenotazioneRepository.delete(prenotazione);
+        // La riga resta in tabella: con stato ANNULLATA la colonna generata slot_attivo diventa NULL,
+        // quindi il vincolo unico la ignora e lo slot torna prenotabile
+        partita.setStato(StatoPartita.ANNULLATA);
     }
 
     // ============================================
     // Prenotazioni di un utente (storico)
     // ============================================
+    @Transactional(readOnly = true)
     public List<PrenotazioneDTO.Response> getByUtente(String telefono) {
         if (!utenteRepository.existsByTelefono(telefono)) {
             throw new ResourceNotFoundException("Utente non trovato con telefono " + telefono);
         }
-        return prenotazioneRepository.findByGiocatoreTelefono(telefono).stream()
+        // Ordiniamo in Java sull'istante reale di inizio: l'ORDER BY della query (data_partita, ora_inizio)
+        // metterebbe la partita delle 00:30 di una serata prima di quella delle 23:00 della stessa serata
+        return partitaRepository
+                .findByPartecipanteTelefono(telefono, TipoPartecipazione.UTENTE, StatoPartita.ANNULLATA)
+                .stream()
+                .sorted(Comparator.comparing((Partita p) -> inizioEffettivo(p)).reversed())
                 .map(this::toResponse)
                 .toList();
     }
@@ -174,21 +226,28 @@ public class PrenotazioneService {
     // ============================================
     // Prossima prenotazione di un utente, dato il telefono
     // ============================================
+    @Transactional(readOnly = true)
     public PrenotazioneDTO.Response getProssimaByTelefono(String telefono) {
         if (!utenteRepository.existsByTelefono(telefono)) {
             throw new ResourceNotFoundException("Utente non trovato con telefono " + telefono);
         }
 
-        LocalDate oggi = LocalDate.now();
-        LocalTime oraAttuale = LocalTime.now();
+        LocalDateTime adesso = LocalDateTime.now();
 
-        List<Prenotazione> prossime = prenotazioneRepository.findProssimeByTelefono(telefono, oggi, oraAttuale);
+        // data_partita è la data della serata: una partita dopo mezzanotte ha data_partita = ieri
+        // ma inizia oggi. Per questo carichiamo le candidate da ieri in poi (dalle 00:00) e scegliamo
+        // in Java la prima con inizio effettivo non ancora passato.
+        List<Partita> candidate = partitaRepository.findProssimeByPartecipanteTelefono(
+                telefono, TipoPartecipazione.UTENTE, StatoPartita.ANNULLATA,
+                adesso.toLocalDate().minusDays(1), LocalTime.MIN);
 
-        if (prossime.isEmpty()) {
-            throw new ResourceNotFoundException("Nessuna prenotazione futura trovata per il telefono " + telefono);
-        }
+        Partita prossima = candidate.stream()
+                .filter(p -> !inizioEffettivo(p).isBefore(adesso))
+                .min(Comparator.comparing(this::inizioEffettivo))
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Nessuna prenotazione futura trovata per il telefono " + telefono));
 
-        return toResponse(prossime.get(0));
+        return toResponse(prossima);
     }
 
     // ============================================
@@ -244,11 +303,25 @@ public class PrenotazioneService {
         return (24 * 60L - minutiApertura) + minutiOrario;
     }
 
-    private void validaDataNonPassata(LocalDate data, LocalTime oraInizio) {
-        LocalDateTime inizio = LocalDateTime.of(data, oraInizio);
+    private void validaDataNonPassata(Campo campo, LocalDate data, LocalTime oraInizio) {
+        LocalDateTime inizio = inizioEffettivo(campo, data, oraInizio);
         if (inizio.isBefore(LocalDateTime.now())) {
             throw new BusinessRuleException("Non è possibile prenotare uno slot nel passato");
         }
+    }
+
+    // data_partita è la data della serata, come la mostra slot-disponibili: in un campo che chiude
+    // a mezzanotte o dopo (chiusura <= apertura, compreso il caso 24 ore), uno slot che inizia prima
+    // dell'ora di apertura appartiene alla parte dopo mezzanotte, quindi inizia il giorno successivo.
+    private LocalDateTime inizioEffettivo(Campo campo, LocalDate dataSerata, LocalTime oraInizio) {
+        boolean chiudeDopoMezzanotte = !campo.getOraChiusura().isAfter(campo.getOraApertura());
+        boolean dopoMezzanotte = chiudeDopoMezzanotte && oraInizio.isBefore(campo.getOraApertura());
+        LocalDate giorno = dopoMezzanotte ? dataSerata.plusDays(1) : dataSerata;
+        return LocalDateTime.of(giorno, oraInizio);
+    }
+
+    private LocalDateTime inizioEffettivo(Partita partita) {
+        return inizioEffettivo(partita.getCampo(), partita.getDataPartita(), partita.getOraInizio());
     }
 
     private Utente trovaUtenteOLancia(String telefono) {
@@ -256,23 +329,65 @@ public class PrenotazioneService {
                 .orElseThrow(() -> new ResourceNotFoundException("Utente non trovato con telefono " + telefono));
     }
 
-    private Utente trovaUtenteSeValorizzato(String telefono) {
-        return telefono == null ? null : trovaUtenteOLancia(telefono);
+    // Le partite annullate restano in tabella ma non occupano lo slot
+    private List<Partita> trovaPartiteAttive(Integer idCampo, LocalDate data) {
+        return partitaRepository.findByCampoIdAndDataPartitaAndStatoNot(idCampo, data, StatoPartita.ANNULLATA);
     }
 
-    private PrenotazioneDTO.Response toResponse(Prenotazione p) {
+    // Giocatore 1 per primo (diventa il creatore), poi i giocatori 2-4 indicati, nell'ordine della richiesta
+    private List<Utente> trovaGiocatori(PrenotazioneDTO.CreateRequest request) {
+        List<String> telefoni = new ArrayList<>();
+        telefoni.add(request.getTelefonoGiocatore1());
+        telefoni.add(request.getTelefonoGiocatore2());
+        telefoni.add(request.getTelefonoGiocatore3());
+        telefoni.add(request.getTelefonoGiocatore4());
+
+        // Ogni utente può avere una sola partecipazione per partita (vincolo uk_partecipazione_utente)
+        Set<String> giaIndicati = new HashSet<>();
+        List<Utente> giocatori = new ArrayList<>();
+        for (String telefono : telefoni.stream().filter(Objects::nonNull).toList()) {
+            if (!giaIndicati.add(telefono)) {
+                throw new BusinessRuleException("Lo stesso giocatore non può essere indicato più di una volta");
+            }
+            giocatori.add(trovaUtenteOLancia(telefono));
+        }
+        return giocatori;
+    }
+
+    // Cerca il nome del vincolo nella catena delle cause: il messaggio di MySQL lo riporta
+    // (es. "Duplicate entry ... for key 'partita.uk_partita_slot'")
+    private boolean violaVincolo(Throwable ex, String nomeVincolo) {
+        for (Throwable causa = ex; causa != null; causa = causa.getCause()) {
+            if (causa.getMessage() != null && causa.getMessage().contains(nomeVincolo)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Il formato della risposta è quello della vecchia tabella prenotazione, che il client usa già:
+    // giocatore 1 = creatore, giocatori 2-4 = le altre partecipazioni UTENTE in ordine di id
+    // (garantito da @OrderBy su Partita.partecipazioni, e dall'ordine di inserimento appena dopo la create).
+    private PrenotazioneDTO.Response toResponse(Partita p) {
+        String telefonoCreatore = p.getCreatore().getTelefono();
+        List<String> altriGiocatori = p.getPartecipazioni().stream()
+                .filter(pa -> pa.getTipo() == TipoPartecipazione.UTENTE)
+                .map(pa -> pa.getUtente().getTelefono())
+                .filter(telefono -> !telefono.equals(telefonoCreatore))
+                .toList();
+
         return new PrenotazioneDTO.Response(
                 p.getId(),
                 p.getCampo().getId(),
                 p.getCampo().getNome(),
-                p.getGiocatore1().getTelefono(),
-                p.getGiocatore2() != null ? p.getGiocatore2().getTelefono() : null,
-                p.getGiocatore3() != null ? p.getGiocatore3().getTelefono() : null,
-                p.getGiocatore4() != null ? p.getGiocatore4().getTelefono() : null,
-                p.getDataPrenotazione(),
+                telefonoCreatore,
+                altriGiocatori.size() > 0 ? altriGiocatori.get(0) : null,
+                altriGiocatori.size() > 1 ? altriGiocatori.get(1) : null,
+                altriGiocatori.size() > 2 ? altriGiocatori.get(2) : null,
+                p.getDataPartita(),
                 p.getOraInizio(),
                 p.getOraFine(),
-                "confermata" // non esiste una colonna stato: se la riga esiste, è attiva
+                p.getStato().name().toLowerCase(Locale.ROOT)
         );
     }
 }

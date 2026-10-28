@@ -28,8 +28,16 @@ public class Utente {
     @Column(name = "is_admin", nullable = false)
     private Boolean isAdmin = false;
 
+    // RF_GU_3: alla registrazione ogni utente parte dal livello 1
     @Column(nullable = false)
-    private Double livello = 0.0;
+    private Double livello = 1.0;
+
+    @Column(nullable = false)
+    private Integer punteggio = 0;
+
+    // Token Firebase del dispositivo, null finché l'app non lo comunica
+    @Column(name = "fcm_token")
+    private String fcmToken;
 
     public Utente() {
     }
@@ -111,4 +119,19 @@ public class Utente {
         this.livello = livello;
     }
 
+    public Integer getPunteggio() {
+        return punteggio;
+    }
+
+    public void setPunteggio(Integer punteggio) {
+        this.punteggio = punteggio;
+    }
+
+    public String getFcmToken() {
+        return fcmToken;
+    }
+
+    public void setFcmToken(String fcmToken) {
+        this.fcmToken = fcmToken;
+    }
 }

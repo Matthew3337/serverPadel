@@ -1,15 +1,21 @@
 package com.padelbooking.api.exception;
 
+import com.fasterxml.jackson.core.JsonParseException;
+import com.fasterxml.jackson.databind.JsonMappingException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -38,9 +44,60 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.BAD_REQUEST, messaggio);
     }
 
+    // Body non leggibile: JSON malformato oppure un valore che non si converte nel tipo del campo
+    // (es. data non in formato AAAA-MM-GG). Senza questo handler finirebbe nel 500 generico.
+    // Nel messaggio indichiamo solo il nome del campo, mai il messaggio interno di Jackson.
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Map<String, Object>> handleBodyNonLeggibile(HttpMessageNotReadableException ex) {
+        String campo = nomeCampoJson(ex.getCause());
+        String messaggio = campo != null
+                ? "Valore non valido per il campo " + campo
+                        + " (date nel formato AAAA-MM-GG, orari nel formato HH:MM o HH:MM:SS)"
+                : "Corpo della richiesta non valido: controlla che sia un JSON corretto";
+        return buildResponse(HttpStatus.BAD_REQUEST, messaggio);
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<Map<String, Object>> handleParametroMancante(MissingServletRequestParameterException ex) {
+        return buildResponse(HttpStatus.BAD_REQUEST, "Parametro obbligatorio mancante: " + ex.getParameterName());
+    }
+
+    // Parametro di query o di path non convertibile (es. idCampo=abc, data=2026-13-45)
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Map<String, Object>> handleTipoParametroErrato(MethodArgumentTypeMismatchException ex) {
+        return buildResponse(HttpStatus.BAD_REQUEST, "Valore non valido per il parametro " + ex.getName());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneric(Exception ex) {
         return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Errore interno: " + ex.getMessage());
+    }
+
+    // Percorso del campo che Jackson non è riuscito a leggere (es. "dataPrenotazione"),
+    // null se il problema è la sintassi del JSON e non un campo specifico.
+    // Un JSON troncato dentro un valore arriva come JsonMappingException con il percorso del campo,
+    // ma la causa è un errore di sintassi: in quel caso il nome del campo trarrebbe in inganno.
+    private String nomeCampoJson(Throwable causa) {
+        if (contieneErroreDiSintassi(causa)) {
+            return null;
+        }
+        if (!(causa instanceof JsonMappingException mappingEx) || mappingEx.getPath().isEmpty()) {
+            return null;
+        }
+        String percorso = mappingEx.getPath().stream()
+                .map(rif -> rif.getFieldName() != null ? rif.getFieldName() : "[" + rif.getIndex() + "]")
+                .collect(Collectors.joining("."));
+        return percorso.isEmpty() ? null : percorso;
+    }
+
+    // JsonParseException comprende anche JsonEOFException (body troncato)
+    private boolean contieneErroreDiSintassi(Throwable ex) {
+        for (Throwable causa = ex; causa != null; causa = causa.getCause()) {
+            if (causa instanceof JsonParseException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status, String message) {
