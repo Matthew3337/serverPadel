@@ -1,0 +1,110 @@
+package com.padelbooking.api.dto;
+
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.util.List;
+
+public class PartitaDTO {
+
+    // Dettaglio di una partita (UI_GP_3): dati dello slot, posti occupati e azioni disponibili
+    // per l'utente che lo richiede in quel momento
+    public static class DettaglioResponse {
+        private Integer id;
+        private Integer idCampo;
+        private String nomeCampo;
+        private LocalDate dataPartita;
+        private LocalTime oraInizio;
+        private LocalTime oraFine;
+        // In minuscolo come in PrenotazioneDTO: creata, confermata, annullata, giocata
+        private String stato;
+        // PUBBLICA o PRIVATA
+        private String tipo;
+        private String telefonoCreatore;
+        // Solo i posti occupati, con il creatore per primo
+        private List<PostoResponse> posti;
+        private AzioniResponse azioni;
+        public DettaglioResponse() { }
+        public DettaglioResponse(Integer id, Integer idCampo, String nomeCampo, LocalDate dataPartita,
+                                 LocalTime oraInizio, LocalTime oraFine, String stato, String tipo,
+                                 String telefonoCreatore, List<PostoResponse> posti, AzioniResponse azioni) {
+            this.id = id; this.idCampo = idCampo; this.nomeCampo = nomeCampo; this.dataPartita = dataPartita;
+            this.oraInizio = oraInizio; this.oraFine = oraFine; this.stato = stato; this.tipo = tipo;
+            this.telefonoCreatore = telefonoCreatore; this.posti = posti; this.azioni = azioni;
+        }
+        public Integer getId() { return id; }
+        public void setId(Integer value) { this.id = value; }
+        public Integer getIdCampo() { return idCampo; }
+        public void setIdCampo(Integer value) { this.idCampo = value; }
+        public String getNomeCampo() { return nomeCampo; }
+        public void setNomeCampo(String value) { this.nomeCampo = value; }
+        public LocalDate getDataPartita() { return dataPartita; }
+        public void setDataPartita(LocalDate value) { this.dataPartita = value; }
+        public LocalTime getOraInizio() { return oraInizio; }
+        public void setOraInizio(LocalTime value) { this.oraInizio = value; }
+        public LocalTime getOraFine() { return oraFine; }
+        public void setOraFine(LocalTime value) { this.oraFine = value; }
+        public String getStato() { return stato; }
+        public void setStato(String value) { this.stato = value; }
+        public String getTipo() { return tipo; }
+        public void setTipo(String value) { this.tipo = value; }
+        public String getTelefonoCreatore() { return telefonoCreatore; }
+        public void setTelefonoCreatore(String value) { this.telefonoCreatore = value; }
+        public List<PostoResponse> getPosti() { return posti; }
+        public void setPosti(List<PostoResponse> value) { this.posti = value; }
+        public AzioniResponse getAzioni() { return azioni; }
+        public void setAzioni(AzioniResponse value) { this.azioni = value; }
+    }
+
+    // Un posto occupato: per i giocatori CAMPO (messi dal circolo) i dati dell'utente sono null
+    public static class PostoResponse {
+        // UTENTE o CAMPO
+        private String tipo;
+        private String telefono;
+        private String nome;
+        private String cognome;
+        private Double livello;
+        private Boolean confermata;
+        public PostoResponse() { }
+        public PostoResponse(String tipo, String telefono, String nome, String cognome, Double livello, Boolean confermata) {
+            this.tipo = tipo; this.telefono = telefono; this.nome = nome; this.cognome = cognome;
+            this.livello = livello; this.confermata = confermata;
+        }
+        public String getTipo() { return tipo; }
+        public void setTipo(String value) { this.tipo = value; }
+        public String getTelefono() { return telefono; }
+        public void setTelefono(String value) { this.telefono = value; }
+        public String getNome() { return nome; }
+        public void setNome(String value) { this.nome = value; }
+        public String getCognome() { return cognome; }
+        public void setCognome(String value) { this.cognome = value; }
+        public Double getLivello() { return livello; }
+        public void setLivello(Double value) { this.livello = value; }
+        public Boolean getConfermata() { return confermata; }
+        public void setConfermata(Boolean value) { this.confermata = value; }
+    }
+
+    // Azioni che l'utente del token può fare adesso sulla partita: il client mostra solo i pulsanti a true
+    public static class AzioniResponse {
+        private Boolean puoInvitare;
+        private Boolean puoEliminare;
+        private Boolean puoUscire;
+        private Boolean puoConfermare;
+        private Boolean puoRegistrareRisultato;
+        public AzioniResponse() { }
+        public AzioniResponse(Boolean puoInvitare, Boolean puoEliminare, Boolean puoUscire,
+                              Boolean puoConfermare, Boolean puoRegistrareRisultato) {
+            this.puoInvitare = puoInvitare; this.puoEliminare = puoEliminare; this.puoUscire = puoUscire;
+            this.puoConfermare = puoConfermare; this.puoRegistrareRisultato = puoRegistrareRisultato;
+        }
+        public Boolean getPuoInvitare() { return puoInvitare; }
+        public void setPuoInvitare(Boolean value) { this.puoInvitare = value; }
+        public Boolean getPuoEliminare() { return puoEliminare; }
+        public void setPuoEliminare(Boolean value) { this.puoEliminare = value; }
+        public Boolean getPuoUscire() { return puoUscire; }
+        public void setPuoUscire(Boolean value) { this.puoUscire = value; }
+        public Boolean getPuoConfermare() { return puoConfermare; }
+        public void setPuoConfermare(Boolean value) { this.puoConfermare = value; }
+        public Boolean getPuoRegistrareRisultato() { return puoRegistrareRisultato; }
+        public void setPuoRegistrareRisultato(Boolean value) { this.puoRegistrareRisultato = value; }
+    }
+}

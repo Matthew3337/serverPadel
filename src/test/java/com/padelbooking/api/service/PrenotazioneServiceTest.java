@@ -17,15 +17,16 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.sql.SQLIntegrityConstraintViolationException;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 
@@ -59,7 +60,6 @@ class PrenotazioneServiceTest {
     @Mock
     private CampoService campoService;
 
-    @InjectMocks
     private PrenotazioneService service;
 
     private Campo campoDiurno;
@@ -67,6 +67,8 @@ class PrenotazioneServiceTest {
 
     @BeforeEach
     void setUp() {
+        // Orologio di sistema: i casi esistenti sono costruiti con date relative ad adesso
+        service = new PrenotazioneService(partitaRepository, utenteRepository, campoService, Clock.systemDefaultZone());
         campoDiurno = new Campo(ID_CAMPO, "Campo Centrale", true, LocalTime.of(8, 0), LocalTime.of(22, 0));
         domani = LocalDate.now().plusDays(1);
     }
@@ -580,6 +582,67 @@ class PrenotazioneServiceTest {
     }
 
     // ============================================
+    // Limite delle 24 ore con orologio fisso
+    // ============================================
+    // Il limite è stretto: si annulla solo se adesso < inizio - 24h, quindi a 24h00m esatte no
+    @Nested
+    class LimiteCancellazioneOrologioFisso {
+
+        private final ZoneId zona = ZoneId.of("Europe/Rome");
+        private final LocalDateTime inizio = LocalDateTime.of(2026, 11, 5, 18, 0);
+
+        private PrenotazioneService serviceAlle(LocalDateTime adesso) {
+            Clock fisso = Clock.fixed(adesso.atZone(zona).toInstant(), zona);
+            return new PrenotazioneService(partitaRepository, utenteRepository, campoService, fisso);
+        }
+
+        private Partita partitaAlle18() {
+            Partita p = partita(5, campoDiurno, utente(TEL_1), inizio.toLocalDate(), inizio.toLocalTime(), StatoPartita.CREATA);
+            p.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, utente(TEL_1), false, false));
+            when(partitaRepository.findById(5)).thenReturn(Optional.of(p));
+            return p;
+        }
+
+        @Test
+        void unSecondoPrimaDelLimitePuoAnnullare() {
+            Partita p = partitaAlle18();
+
+            serviceAlle(inizio.minusHours(24).minusSeconds(1)).cancel(5, TEL_1, false);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.ANNULLATA);
+        }
+
+        @Test
+        void esattamenteA24OreDa409() {
+            Partita p = partitaAlle18();
+
+            assertThatThrownBy(() -> serviceAlle(inizio.minusHours(24)).cancel(5, TEL_1, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Non è possibile cancellare una prenotazione a meno di 24 ore dall'inizio");
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+        }
+
+        @Test
+        void unSecondoDopoIlLimiteDa409() {
+            Partita p = partitaAlle18();
+
+            assertThatThrownBy(() -> serviceAlle(inizio.minusHours(24).plusSeconds(1)).cancel(5, TEL_1, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Non è possibile cancellare una prenotazione a meno di 24 ore dall'inizio");
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+        }
+
+        @Test
+        void adminEsattamenteA24OrePuoAnnullare() {
+            Partita p = partitaAlle18();
+
+            serviceAlle(inizio.minusHours(24)).cancel(5, TEL_ESTRANEO, true);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.ANNULLATA);
+        }
+    }
+
+    // ============================================
     // Slot disponibili
     // ============================================
     @Nested
@@ -723,7 +786,7 @@ class PrenotazioneServiceTest {
     // ============================================
     // Inizio effettivo (data_partita = data della serata)
     // ============================================
-    // Il service usa LocalDateTime.now() senza Clock: i casi sono costruiti con date relative
+    // I test usano l'orologio di sistema: i casi sono costruiti con date relative
     // ad adesso e con orari scelti perché l'esito non dipenda dall'ora in cui girano i test.
     @Nested
     class InizioEffettivo {
