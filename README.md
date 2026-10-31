@@ -41,6 +41,12 @@ L'utente admin inserito via seed ha come password l'hash placeholder presente ne
 
 Nella risposta delle prenotazioni `id` è l'id della partita, `telefonoGiocatore1` il creatore, `telefonoGiocatore2..4` gli altri giocatori (null se mancano), `dataPrenotazione` la data della partita e `stato` lo stato in minuscolo (`creata`, `confermata`, `annullata`, `giocata`) e `tipo` il tipo della partita (`PUBBLICA` o `PRIVATA`).
 
+### Partite (richiedono header `Authorization: Bearer <token>`)
+- `GET /api/partite/{id}` — dettaglio della partita: `id`, `idCampo`, `nomeCampo`, `dataPartita`, `oraInizio`, `oraFine`, `stato` (minuscolo), `tipo` (`PUBBLICA`/`PRIVATA`), `telefonoCreatore`, `posti` e `azioni`. Risposta 200.
+  - Visibilità: partecipanti e admin la vedono sempre (anche annullata); una partita `PUBBLICA` non annullata è visibile anche a chi ha un livello che differisce al massimo di 1 da quello del creatore. Negli altri casi 404 con lo stesso messaggio della partita inesistente (`Partita non trovata con id {id}`).
+  - `posti`: solo i posti occupati, il creatore per primo; ogni posto ha `tipo` (`UTENTE`/`CAMPO`), `telefono`, `nome`, `cognome`, `livello` (null per i posti `CAMPO`) e `confermata`.
+  - `azioni` (calcolate per l'utente del token e per l'istante attuale, sull'inizio effettivo della partita anche dopo mezzanotte): `puoInvitare` (creatore, stato creata, più di 24h all'inizio, meno di 4 posti occupati), `puoEliminare` (creatore, stato creata, più di 24h all'inizio), `puoUscire` (altro partecipante, stato creata, più di 24h all'inizio), `puoConfermare` (partecipante non ancora confermato, stato creata, tra 24h e 12h dall'inizio), `puoRegistrareRisultato` (partecipante, stato confermata, dalla fine fino a 24h dopo). Per l'admin sono tutte false.
+
 ## Esempio di body per creare una prenotazione
 
 ```json

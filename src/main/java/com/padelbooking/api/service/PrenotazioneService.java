@@ -16,7 +16,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -31,8 +31,7 @@ public class PrenotazioneService {
     // Durata fissa di ogni prenotazione, coerente con la regola di business del progetto
     private static final int DURATA_SLOT_MINUTI = 90;
 
-    // Quanto tempo prima si può ancora cancellare una prenotazione
-    private static final int LIMITE_CANCELLAZIONE_ORE = 24;
+    // Il limite di 24 ore per l'annullamento è in RegoleTempoPartita, condiviso con PartitaService
 
     // Nome del vincolo unico che impedisce due partite attive sullo stesso slot
     private static final String VINCOLO_SLOT_UNICO = "uk_partita_slot";
@@ -42,13 +41,16 @@ public class PrenotazioneService {
     private final PartitaRepository partitaRepository;
     private final UtenteRepository utenteRepository;
     private final CampoService campoService;
+    private final Clock clock;
 
     public PrenotazioneService(PartitaRepository partitaRepository,
                                 UtenteRepository utenteRepository,
-                                CampoService campoService) {
+                                CampoService campoService,
+                                Clock clock) {
         this.partitaRepository = partitaRepository;
         this.utenteRepository = utenteRepository;
         this.campoService = campoService;
+        this.clock = clock;
     }
 
     // ============================================
@@ -185,13 +187,10 @@ public class PrenotazioneService {
         }
 
         // Istante reale, non data_partita + ora: una partita delle 00:30 della serata di sabato
-        // inizia domenica, e le 24 ore vanno contate fino a lì
-        LocalDateTime inizioPrenotazione = inizioEffettivo(partita);
-        long oreRimanenti = Duration.between(LocalDateTime.now(), inizioPrenotazione).toHours();
-
-        if (!isAdmin && oreRimanenti < LIMITE_CANCELLAZIONE_ORE) {
-            throw new BusinessRuleException(
-                    "Non è possibile cancellare una prenotazione a meno di " + LIMITE_CANCELLAZIONE_ORE + " ore dall'inizio");
+        // inizia domenica, e le 24 ore vanno contate fino a lì (lo fa RegoleTempoPartita)
+        if (!isAdmin && !RegoleTempoPartita.primaDelLimiteModifiche(partita, LocalDateTime.now(clock))) {
+            throw new BusinessRuleException("Non è possibile cancellare una prenotazione a meno di "
+                    + RegoleTempoPartita.getLimiteModificheOre() + " ore dall'inizio");
         }
 
         // La riga resta in tabella: con stato ANNULLATA la colonna generata slot_attivo diventa NULL,
@@ -226,7 +225,7 @@ public class PrenotazioneService {
             throw new ResourceNotFoundException("Utente non trovato con telefono " + telefono);
         }
 
-        LocalDateTime adesso = LocalDateTime.now();
+        LocalDateTime adesso = LocalDateTime.now(clock);
 
         // data_partita è la data della serata: una partita dopo mezzanotte ha data_partita = ieri
         // ma inizia oggi. Per questo carichiamo le candidate da ieri in poi (dalle 00:00) e scegliamo
@@ -299,23 +298,19 @@ public class PrenotazioneService {
 
     private void validaDataNonPassata(Campo campo, LocalDate data, LocalTime oraInizio) {
         LocalDateTime inizio = inizioEffettivo(campo, data, oraInizio);
-        if (inizio.isBefore(LocalDateTime.now())) {
+        if (inizio.isBefore(LocalDateTime.now(clock))) {
             throw new BusinessRuleException("Non è possibile prenotare uno slot nel passato");
         }
     }
 
-    // data_partita è la data della serata, come la mostra slot-disponibili: in un campo che chiude
-    // a mezzanotte o dopo (chiusura <= apertura, compreso il caso 24 ore), uno slot che inizia prima
-    // dell'ora di apertura appartiene alla parte dopo mezzanotte, quindi inizia il giorno successivo.
+    // L'inizio effettivo (data della serata + eventuale giorno dopo mezzanotte) è calcolato
+    // in RegoleTempoPartita, condiviso con PartitaService
     private LocalDateTime inizioEffettivo(Campo campo, LocalDate dataSerata, LocalTime oraInizio) {
-        boolean chiudeDopoMezzanotte = !campo.getOraChiusura().isAfter(campo.getOraApertura());
-        boolean dopoMezzanotte = chiudeDopoMezzanotte && oraInizio.isBefore(campo.getOraApertura());
-        LocalDate giorno = dopoMezzanotte ? dataSerata.plusDays(1) : dataSerata;
-        return LocalDateTime.of(giorno, oraInizio);
+        return RegoleTempoPartita.inizioEffettivo(campo, dataSerata, oraInizio);
     }
 
     private LocalDateTime inizioEffettivo(Partita partita) {
-        return inizioEffettivo(partita.getCampo(), partita.getDataPartita(), partita.getOraInizio());
+        return RegoleTempoPartita.inizioEffettivo(partita);
     }
 
     private Utente trovaUtenteOLancia(String telefono) {
