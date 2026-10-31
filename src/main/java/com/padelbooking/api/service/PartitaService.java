@@ -10,6 +10,7 @@ import com.padelbooking.api.model.StatoPartita;
 import com.padelbooking.api.model.TipoPartecipazione;
 import com.padelbooking.api.model.TipoPartita;
 import com.padelbooking.api.model.Utente;
+import com.padelbooking.api.repository.PartecipazioneRepository;
 import com.padelbooking.api.repository.PartitaRepository;
 import com.padelbooking.api.repository.UtenteRepository;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -56,14 +57,21 @@ public class PartitaService {
     private static final String MESSAGGIO_USCITA_CHIUSA =
             "L'uscita è chiusa: mancano meno di " + RegoleTempoPartita.getLimiteModificheOre() + " ore all'inizio";
 
+    // Esito della partita per l'utente nello storico: fanno parte del contratto con il client
+    private static final String ESITO_VINTA = "VINTA";
+    private static final String ESITO_PERSA = "PERSA";
+
     private final PartitaRepository partitaRepository;
+    private final PartecipazioneRepository partecipazioneRepository;
     private final UtenteRepository utenteRepository;
     private final Clock clock;
 
     public PartitaService(PartitaRepository partitaRepository,
+                          PartecipazioneRepository partecipazioneRepository,
                           UtenteRepository utenteRepository,
                           Clock clock) {
         this.partitaRepository = partitaRepository;
+        this.partecipazioneRepository = partecipazioneRepository;
         this.utenteRepository = utenteRepository;
         this.clock = clock;
     }
@@ -122,6 +130,30 @@ public class PartitaService {
                 .sorted(Comparator.comparing((Partita p) -> RegoleTempoPartita.inizioEffettivo(p))
                         .thenComparing(Partita::getId))
                 .map(this::toBachecaResponse)
+                .toList();
+    }
+
+    // ============================================
+    // Storico partite
+    // ============================================
+    // RF_GP_18, RF_GP_19: le partite non annullate in cui l'utente gioca, future e passate, dalla più
+    // recente, con il risultato se registrato. L'admin non gioca, quindi il suo storico è vuoto.
+    @Transactional(readOnly = true)
+    public List<PartitaDTO.StoricoResponse> getStorico(String telefonoRichiedente, boolean isAdmin) {
+        if (isAdmin) {
+            return List.of();
+        }
+        // Una sola query: partita e campo arrivano in JOIN FETCH con la partecipazione dell'utente,
+        // che porta già squadra e punti; le altre partecipazioni della partita non servono
+        return partecipazioneRepository.findStoricoByTelefono(telefonoRichiedente, TipoPartecipazione.UTENTE,
+                        StatoPartita.ANNULLATA).stream()
+                // Ordine sull'inizio effettivo, come la bacheca ma decrescente: con data_partita e ora_inizio
+                // una partita alle 00:30 della serata risulterebbe precedente a quella delle 18:00.
+                // A parità di inizio (campi diversi) l'id rende l'ordine stabile
+                .sorted(Comparator.comparing((Partecipazione pa) -> RegoleTempoPartita.inizioEffettivo(pa.getPartita()))
+                        .thenComparing(pa -> pa.getPartita().getId())
+                        .reversed())
+                .map(this::toStoricoResponse)
                 .toList();
     }
 
@@ -390,6 +422,42 @@ public class PartitaService {
         }
         return new PartitaDTO.PostoResponse(pa.getTipo().name(), u.getTelefono(), u.getNome(), u.getCognome(),
                 u.getLivello(), pa.getConfermata());
+    }
+
+    private PartitaDTO.StoricoResponse toStoricoResponse(Partecipazione pa) {
+        Partita p = pa.getPartita();
+        return new PartitaDTO.StoricoResponse(
+                p.getId(),
+                p.getCampo().getId(),
+                p.getCampo().getNome(),
+                p.getDataPartita(),
+                p.getOraInizio(),
+                p.getOraFine(),
+                p.getStato().name().toLowerCase(Locale.ROOT),
+                p.getTipo().name(),
+                toRisultatoResponse(pa)
+        );
+    }
+
+    // null finché il risultato non è registrato. Il vincitore lo stabilisce RegoleRisultatoPartita;
+    // l'esito resta null se l'utente non ha una squadra o se i set non indicano un vincitore.
+    private PartitaDTO.RisultatoResponse toRisultatoResponse(Partecipazione pa) {
+        Partita p = pa.getPartita();
+        if (!RegoleRisultatoPartita.risultatoRegistrato(p)) {
+            return null;
+        }
+        List<RegoleRisultatoPartita.SetGiocato> setGiocati = RegoleRisultatoPartita.setGiocati(p);
+        List<PartitaDTO.SetResponse> set = setGiocati.stream()
+                .map(s -> new PartitaDTO.SetResponse(s.squadra1(), s.squadra2()))
+                .toList();
+
+        Integer squadraUtente = pa.getSquadra();
+        Integer vincitrice = RegoleRisultatoPartita.squadraVincitrice(setGiocati);
+        String esito = null;
+        if (squadraUtente != null && vincitrice != null) {
+            esito = squadraUtente.equals(vincitrice) ? ESITO_VINTA : ESITO_PERSA;
+        }
+        return new PartitaDTO.RisultatoResponse(set, squadraUtente, esito, pa.getPuntiAssegnati());
     }
 
     private PartitaDTO.BachecaResponse toBachecaResponse(Partita p) {

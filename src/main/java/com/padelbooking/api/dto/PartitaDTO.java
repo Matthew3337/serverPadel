@@ -150,4 +150,84 @@ public class PartitaDTO {
         public Integer getPostiLiberi() { return postiLiberi; }
         public void setPostiLiberi(Integer value) { this.postiLiberi = value; }
     }
+
+    // Una riga dello storico (UI_GP_8): lo slot, lo stato e, se registrato, il risultato visto dall'utente
+    public static class StoricoResponse {
+        private Integer id;
+        private Integer idCampo;
+        private String nomeCampo;
+        private LocalDate dataPartita;
+        private LocalTime oraInizio;
+        private LocalTime oraFine;
+        // In minuscolo come in DettaglioResponse: creata, confermata, giocata (le annullate non ci sono)
+        private String stato;
+        // PUBBLICA o PRIVATA
+        private String tipo;
+        // null finché il risultato non è registrato
+        private RisultatoResponse risultato;
+        public StoricoResponse() { }
+        public StoricoResponse(Integer id, Integer idCampo, String nomeCampo, LocalDate dataPartita,
+                               LocalTime oraInizio, LocalTime oraFine, String stato, String tipo,
+                               RisultatoResponse risultato) {
+            this.id = id; this.idCampo = idCampo; this.nomeCampo = nomeCampo; this.dataPartita = dataPartita;
+            this.oraInizio = oraInizio; this.oraFine = oraFine; this.stato = stato; this.tipo = tipo;
+            this.risultato = risultato;
+        }
+        public Integer getId() { return id; }
+        public void setId(Integer value) { this.id = value; }
+        public Integer getIdCampo() { return idCampo; }
+        public void setIdCampo(Integer value) { this.idCampo = value; }
+        public String getNomeCampo() { return nomeCampo; }
+        public void setNomeCampo(String value) { this.nomeCampo = value; }
+        public LocalDate getDataPartita() { return dataPartita; }
+        public void setDataPartita(LocalDate value) { this.dataPartita = value; }
+        public LocalTime getOraInizio() { return oraInizio; }
+        public void setOraInizio(LocalTime value) { this.oraInizio = value; }
+        public LocalTime getOraFine() { return oraFine; }
+        public void setOraFine(LocalTime value) { this.oraFine = value; }
+        public String getStato() { return stato; }
+        public void setStato(String value) { this.stato = value; }
+        public String getTipo() { return tipo; }
+        public void setTipo(String value) { this.tipo = value; }
+        public RisultatoResponse getRisultato() { return risultato; }
+        public void setRisultato(RisultatoResponse value) { this.risultato = value; }
+    }
+
+    // Risultato dal punto di vista dell'utente: squadraUtente ed esito sono null se l'utente non ha
+    // una squadra, puntiAssegnati è null finché i punteggi non sono calcolati (T10)
+    public static class RisultatoResponse {
+        // Solo i set giocati: 2 o 3
+        private List<SetResponse> set;
+        // 1 o 2
+        private Integer squadraUtente;
+        // VINTA o PERSA
+        private String esito;
+        private Integer puntiAssegnati;
+        public RisultatoResponse() { }
+        public RisultatoResponse(List<SetResponse> set, Integer squadraUtente, String esito, Integer puntiAssegnati) {
+            this.set = set; this.squadraUtente = squadraUtente; this.esito = esito; this.puntiAssegnati = puntiAssegnati;
+        }
+        public List<SetResponse> getSet() { return set; }
+        public void setSet(List<SetResponse> value) { this.set = value; }
+        public Integer getSquadraUtente() { return squadraUtente; }
+        public void setSquadraUtente(Integer value) { this.squadraUtente = value; }
+        public String getEsito() { return esito; }
+        public void setEsito(String value) { this.esito = value; }
+        public Integer getPuntiAssegnati() { return puntiAssegnati; }
+        public void setPuntiAssegnati(Integer value) { this.puntiAssegnati = value; }
+    }
+
+    // I game fatti da ciascuna squadra in un set
+    public static class SetResponse {
+        private Integer squadra1;
+        private Integer squadra2;
+        public SetResponse() { }
+        public SetResponse(Integer squadra1, Integer squadra2) {
+            this.squadra1 = squadra1; this.squadra2 = squadra2;
+        }
+        public Integer getSquadra1() { return squadra1; }
+        public void setSquadra1(Integer value) { this.squadra1 = value; }
+        public Integer getSquadra2() { return squadra2; }
+        public void setSquadra2(Integer value) { this.squadra2 = value; }
+    }
 }
