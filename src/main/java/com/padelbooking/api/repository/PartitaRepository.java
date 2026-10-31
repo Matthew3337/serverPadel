@@ -3,13 +3,17 @@ package com.padelbooking.api.repository;
 import com.padelbooking.api.model.Partita;
 import com.padelbooking.api.model.StatoPartita;
 import com.padelbooking.api.model.TipoPartecipazione;
+import com.padelbooking.api.model.TipoPartita;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
+import java.util.Optional;
 
 public interface PartitaRepository extends JpaRepository<Partita, Integer> {
 
@@ -53,4 +57,26 @@ public interface PartitaRepository extends JpaRepository<Partita, Integer> {
                                                       @Param("statoEscluso") StatoPartita statoEscluso,
                                                       @Param("dataDa") LocalDate dataDa,
                                                       @Param("oraDa") LocalTime oraDa);
+
+    // Candidate per la bacheca (RF_GP_11): partite di un tipo e di uno stato con data_partita da una data in poi.
+    // Campo e creatore in JOIN FETCH perché servono a ogni riga della risposta.
+    // Come sopra, data_partita è la data della serata: il service filtra e ordina sull'inizio effettivo.
+    @Query("""
+            SELECT p FROM Partita p
+            JOIN FETCH p.campo
+            JOIN FETCH p.creatore
+            WHERE p.tipo = :tipo
+              AND p.stato = :stato
+              AND p.dataPartita >= :dataDa
+            """)
+    List<Partita> findByTipoAndStatoDaData(@Param("tipo") TipoPartita tipo,
+                                           @Param("stato") StatoPartita stato,
+                                           @Param("dataDa") LocalDate dataDa);
+
+    // Partita con lock in scrittura (SELECT ... FOR UPDATE) fino alla fine della transazione:
+    // serve all'ingresso, così due richieste simultanee sull'ultimo posto vengono serializzate
+    // e la seconda vede la partecipazione aggiunta dalla prima
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT p FROM Partita p WHERE p.id = :id")
+    Optional<Partita> findByIdPerAggiornamento(@Param("id") Integer id);
 }

@@ -46,6 +46,13 @@ Nella risposta delle prenotazioni `id` è l'id della partita, `telefonoGiocatore
   - Visibilità: partecipanti e admin la vedono sempre (anche annullata); una partita `PUBBLICA` non annullata è visibile anche a chi ha un livello che differisce al massimo di 1 da quello del creatore. Negli altri casi 404 con lo stesso messaggio della partita inesistente (`Partita non trovata con id {id}`).
   - `posti`: solo i posti occupati, il creatore per primo; ogni posto ha `tipo` (`UTENTE`/`CAMPO`), `telefono`, `nome`, `cognome`, `livello` (null per i posti `CAMPO`) e `confermata`.
   - `azioni` (calcolate per l'utente del token e per l'istante attuale, sull'inizio effettivo della partita anche dopo mezzanotte): `puoInvitare` (creatore, stato creata, più di 24h all'inizio, meno di 4 posti occupati), `puoEliminare` (creatore, stato creata, più di 24h all'inizio), `puoUscire` (altro partecipante, stato creata, più di 24h all'inizio), `puoConfermare` (partecipante non ancora confermato, stato creata, tra 24h e 12h dall'inizio), `puoRegistrareRisultato` (partecipante, stato confermata, dalla fine fino a 24h dopo). Per l'admin sono tutte false.
+- `GET /api/partite/pubbliche` — bacheca delle partite in cui l'utente può entrare: tipo `PUBBLICA`, stato `creata`, meno di 4 posti occupati, più di 24h all'inizio effettivo, livello del creatore che differisce al massimo di 1 da quello dell'utente, utente non già partecipante. Ordinate per inizio effettivo crescente. Risposta 200: `[ { id, idCampo, nomeCampo, dataPartita, oraInizio, oraFine, nomeCreatore, cognomeCreatore, livelloCreatore, postiLiberi } ]`, `[]` se non ce ne sono. Per l'admin sempre `[]`.
+- `POST /api/partite/{id}/entra` — senza body: l'utente entra subito nella partita come giocatore (non invitato, non confermato). Risposta 200 con lo stesso dettaglio di `GET /api/partite/{id}`, già aggiornato. Errori:
+  - 404 `Partita non trovata con id {id}` se la partita non esiste o l'utente non la vedrebbe (privata, livello fuori range, annullata);
+  - 409 `La partita non è più aperta` (stato diverso da `creata`), `La partita è al completo`, `L'ingresso è chiuso: mancano meno di 24 ore all'inizio`, `Partecipi già a questa partita`;
+  - 403 `L'amministratore non può entrare nelle partite`.
+
+  La partita viene letta con un lock in scrittura (`SELECT ... FOR UPDATE`) per tutta la transazione, quindi due ingressi simultanei sull'ultimo posto non portano a 5 giocatori; il vincolo unico `uk_partecipazione_utente` impedisce in ogni caso il doppio posto dello stesso utente.
 
 ## Esempio di body per creare una prenotazione
 

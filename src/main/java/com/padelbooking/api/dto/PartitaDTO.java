@@ -107,4 +107,47 @@ public class PartitaDTO {
         public Boolean getPuoRegistrareRisultato() { return puoRegistrareRisultato; }
         public void setPuoRegistrareRisultato(Boolean value) { this.puoRegistrareRisultato = value; }
     }
+
+    // Una riga della bacheca delle partite pubbliche (UI_GP_4): lo slot, chi l'ha creata e quanti posti restano
+    public static class BachecaResponse {
+        private Integer id;
+        private Integer idCampo;
+        private String nomeCampo;
+        private LocalDate dataPartita;
+        private LocalTime oraInizio;
+        private LocalTime oraFine;
+        private String nomeCreatore;
+        private String cognomeCreatore;
+        private Double livelloCreatore;
+        // 4 meno i posti occupati (UTENTE o CAMPO)
+        private Integer postiLiberi;
+        public BachecaResponse() { }
+        public BachecaResponse(Integer id, Integer idCampo, String nomeCampo, LocalDate dataPartita,
+                               LocalTime oraInizio, LocalTime oraFine, String nomeCreatore, String cognomeCreatore,
+                               Double livelloCreatore, Integer postiLiberi) {
+            this.id = id; this.idCampo = idCampo; this.nomeCampo = nomeCampo; this.dataPartita = dataPartita;
+            this.oraInizio = oraInizio; this.oraFine = oraFine; this.nomeCreatore = nomeCreatore;
+            this.cognomeCreatore = cognomeCreatore; this.livelloCreatore = livelloCreatore; this.postiLiberi = postiLiberi;
+        }
+        public Integer getId() { return id; }
+        public void setId(Integer value) { this.id = value; }
+        public Integer getIdCampo() { return idCampo; }
+        public void setIdCampo(Integer value) { this.idCampo = value; }
+        public String getNomeCampo() { return nomeCampo; }
+        public void setNomeCampo(String value) { this.nomeCampo = value; }
+        public LocalDate getDataPartita() { return dataPartita; }
+        public void setDataPartita(LocalDate value) { this.dataPartita = value; }
+        public LocalTime getOraInizio() { return oraInizio; }
+        public void setOraInizio(LocalTime value) { this.oraInizio = value; }
+        public LocalTime getOraFine() { return oraFine; }
+        public void setOraFine(LocalTime value) { this.oraFine = value; }
+        public String getNomeCreatore() { return nomeCreatore; }
+        public void setNomeCreatore(String value) { this.nomeCreatore = value; }
+        public String getCognomeCreatore() { return cognomeCreatore; }
+        public void setCognomeCreatore(String value) { this.cognomeCreatore = value; }
+        public Double getLivelloCreatore() { return livelloCreatore; }
+        public void setLivelloCreatore(Double value) { this.livelloCreatore = value; }
+        public Integer getPostiLiberi() { return postiLiberi; }
+        public void setPostiLiberi(Integer value) { this.postiLiberi = value; }
+    }
 }
