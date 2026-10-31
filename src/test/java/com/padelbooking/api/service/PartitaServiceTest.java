@@ -1,6 +1,8 @@
 package com.padelbooking.api.service;
 
 import com.padelbooking.api.dto.PartitaDTO;
+import com.padelbooking.api.exception.AccessoNegatoException;
+import com.padelbooking.api.exception.BusinessRuleException;
 import com.padelbooking.api.exception.ResourceNotFoundException;
 import com.padelbooking.api.model.Campo;
 import com.padelbooking.api.model.Partecipazione;
@@ -17,16 +19,23 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -346,6 +355,317 @@ class PartitaServiceTest {
     }
 
     // ============================================
+    // Bacheca partite pubbliche
+    // ============================================
+    @Nested
+    class Bacheca {
+
+        @Test
+        void adminRiceveListaVuotaSenzaLeggereLePartite() {
+            assertThat(service.getBachecaPubbliche(TEL_ESTRANEO, true)).isEmpty();
+
+            verifyNoInteractions(partitaRepository);
+        }
+
+        @Test
+        void utenteInesistenteRiceveListaVuota() {
+            when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.empty());
+
+            assertThat(service.getBachecaPubbliche(TEL_ESTRANEO, false)).isEmpty();
+        }
+
+        @Test
+        void rispostaConDatiDelCreatoreEPostiLiberi() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubEstraneo(3.5);
+            stubCandidate(p);
+
+            List<PartitaDTO.BachecaResponse> r = service.getBachecaPubbliche(TEL_ESTRANEO, false);
+
+            assertThat(r).hasSize(1);
+            PartitaDTO.BachecaResponse riga = r.get(0);
+            assertThat(riga.getId()).isEqualTo(7);
+            assertThat(riga.getIdCampo()).isEqualTo(1);
+            assertThat(riga.getNomeCampo()).isEqualTo("Campo 1");
+            assertThat(riga.getDataPartita()).isEqualTo(LocalDate.of(2026, 11, 4));
+            assertThat(riga.getOraInizio()).isEqualTo(LocalTime.of(12, 0));
+            assertThat(riga.getOraFine()).isEqualTo(LocalTime.of(13, 30));
+            assertThat(riga.getNomeCreatore()).isEqualTo("Mario");
+            assertThat(riga.getCognomeCreatore()).isEqualTo("Rossi");
+            assertThat(riga.getLivelloCreatore()).isEqualTo(2.5);
+            assertThat(riga.getPostiLiberi()).isEqualTo(2);
+        }
+
+        @Test
+        void escludePartitaAlCompleto() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, false));
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            aggiungi(p, 4, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubEstraneo(2.5);
+            stubCandidate(p);
+
+            assertThat(service.getBachecaPubbliche(TEL_ESTRANEO, false)).isEmpty();
+        }
+
+        @Test
+        void soglia24OreEsclusaUnMinutoPrimaInclusa() {
+            Partita esattamente24 = partitaConId(7, ADESSO.plusHours(24));
+            Partita oltre24 = partitaConId(8, ADESSO.plusHours(24).plusMinutes(1));
+            stubEstraneo(2.5);
+            stubCandidate(esattamente24, oltre24);
+
+            assertThat(service.getBachecaPubbliche(TEL_ESTRANEO, false))
+                    .extracting(PartitaDTO.BachecaResponse::getId)
+                    .containsExactly(8);
+        }
+
+        @Test
+        void filtraPerLivelloEntroUno() {
+            stubEstraneo(4.0);
+            stubCandidate(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+
+            assertThat(service.getBachecaPubbliche(TEL_ESTRANEO, false)).isEmpty();
+        }
+
+        @Test
+        void livelloInferioreDiUnoIncluso() {
+            stubEstraneo(1.5);
+            stubCandidate(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+
+            assertThat(service.getBachecaPubbliche(TEL_ESTRANEO, false)).hasSize(1);
+        }
+
+        @Test
+        void escludeLePartiteInCuiLUtenteGiaGioca() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, false));
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+            stubCandidate(p);
+
+            assertThat(service.getBachecaPubbliche(TEL_2, false)).isEmpty();
+        }
+
+        @Test
+        void ordinataPerInizioEffettivoAncheDopoMezzanotte() {
+            // Campo 18:00-02:00: la partita delle 00:30 della serata del 3 inizia il 4 alle 00:30,
+            // dopo quella delle 20:00 del 3 anche se l'ora è minore
+            Campo serale = new Campo(2, "Campo Serale", false, LocalTime.of(18, 0), LocalTime.of(2, 0));
+            Partita dopoMezzanotte = partitaConId(7, LocalDateTime.of(2026, 11, 3, 0, 30));
+            dopoMezzanotte.setCampo(serale);
+            Partita sera = partitaConId(8, LocalDateTime.of(2026, 11, 3, 20, 0));
+            sera.setCampo(serale);
+            Partita primaDiTutte = partitaConId(9, LocalDateTime.of(2026, 11, 3, 10, 0));
+            stubEstraneo(2.5);
+            stubCandidate(dopoMezzanotte, sera, primaDiTutte);
+
+            assertThat(service.getBachecaPubbliche(TEL_ESTRANEO, false))
+                    .extracting(PartitaDTO.BachecaResponse::getId)
+                    .containsExactly(9, 8, 7);
+        }
+
+        @Test
+        void partitaDopoMezzanotteFiltrataSullInizioEffettivo() {
+            // Serata del 2 novembre alle 00:30 su un campo serale: inizia il 3 alle 00:30, 36h30 dopo adesso.
+            // Con data_partita + ora_inizio sarebbe 12h30 e verrebbe esclusa per errore.
+            // La serata di oggi alle 00:30 inizia invece domani alle 00:30, entro le 24 ore: esclusa.
+            Campo serale = new Campo(2, "Campo Serale", false, LocalTime.of(18, 0), LocalTime.of(2, 0));
+            Partita domani = partitaConId(7, LocalDateTime.of(2026, 11, 2, 0, 30));
+            domani.setCampo(serale);
+            Partita oggi = partitaConId(8, LocalDateTime.of(2026, 11, 1, 0, 30));
+            oggi.setCampo(serale);
+            stubEstraneo(2.5);
+            stubCandidate(domani, oggi);
+
+            assertThat(service.getBachecaPubbliche(TEL_ESTRANEO, false))
+                    .extracting(PartitaDTO.BachecaResponse::getId)
+                    .containsExactly(7);
+        }
+
+        private Partita partitaConId(int id, LocalDateTime inizio) {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, inizio);
+            p.setId(id);
+            return p;
+        }
+
+        private void stubCandidate(Partita... partite) {
+            when(partitaRepository.findByTipoAndStatoDaData(TipoPartita.PUBBLICA, StatoPartita.CREATA,
+                    ADESSO.toLocalDate())).thenReturn(List.of(partite));
+        }
+    }
+
+    // ============================================
+    // Ingresso
+    // ============================================
+    @Nested
+    class Ingresso {
+
+        @Test
+        void adminRifiutatoCon403SenzaLeggereLaPartita() {
+            assertThatThrownBy(() -> service.entra(7, TEL_ESTRANEO, true))
+                    .isInstanceOf(AccessoNegatoException.class);
+
+            verifyNoInteractions(partitaRepository);
+        }
+
+        @Test
+        void inesistenteDa404() {
+            when(partitaRepository.findByIdPerAggiornamento(7)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.entra(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void privataDa404ComeIlDettaglio() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.entra(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void livelloFuoriRangeDa404() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+            stubEstraneo(4.0);
+
+            assertThatThrownBy(() -> service.entra(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void annullataDa404() {
+            stubLock(partita(StatoPartita.ANNULLATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.entra(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        @Test
+        void giaPartecipanteDa409AncheSePrivata() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+
+            assertThatThrownBy(() -> service.entra(7, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Partecipi già a questa partita");
+        }
+
+        @Test
+        void confermataDa409NonPiuAperta() {
+            stubLock(partita(StatoPartita.CONFERMATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.entra(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("La partita non è più aperta");
+        }
+
+        @Test
+        void alCompletoDa409() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, false));
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            aggiungi(p, 4, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubLock(p);
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.entra(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("La partita è al completo");
+        }
+
+        @Test
+        void esattamente24OrePrimaDa409IngressoChiuso() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusHours(24)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.entra(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("L'ingresso è chiuso: mancano meno di 24 ore all'inizio");
+            verify(partitaRepository, never()).flush();
+        }
+
+        @Test
+        void ingressoAggiungePartecipazioneUtenteNonInvitataNonConfermata() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusHours(24).plusMinutes(1));
+            stubLock(p);
+            Utente estraneo = stubEstraneo(3.5);
+
+            PartitaDTO.DettaglioResponse r = service.entra(7, TEL_ESTRANEO, false);
+
+            verify(partitaRepository).flush();
+            assertThat(p.getPartecipazioni()).hasSize(2);
+            Partecipazione nuova = p.getPartecipazioni().get(1);
+            assertThat(nuova.getTipo()).isEqualTo(TipoPartecipazione.UTENTE);
+            assertThat(nuova.getUtente()).isSameAs(estraneo);
+            assertThat(nuova.getPartita()).isSameAs(p);
+            assertThat(nuova.getInvitato()).isFalse();
+            assertThat(nuova.getConfermata()).isFalse();
+
+            assertThat(r.getId()).isEqualTo(7);
+            assertThat(r.getPosti()).extracting(PartitaDTO.PostoResponse::getTelefono)
+                    .containsExactly(TEL_CREATORE, TEL_ESTRANEO);
+            assertThat(r.getAzioni().getPuoUscire()).isTrue();
+            assertThat(r.getAzioni().getPuoEliminare()).isFalse();
+            assertThat(r.getAzioni().getPuoInvitare()).isFalse();
+        }
+
+        @Test
+        void ingressoSullUltimoPostoAmmesso() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, false));
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubLock(p);
+            stubEstraneo(2.5);
+
+            assertThat(service.entra(7, TEL_ESTRANEO, false).getPosti()).hasSize(4);
+        }
+
+        @Test
+        void vincoloUnicoSulDbDiventaPartecipiGia() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+            doThrow(new DataIntegrityViolationException(
+                    "Duplicate entry '7-3339999999' for key 'partecipazione.uk_partecipazione_utente'"))
+                    .when(partitaRepository).flush();
+
+            assertThatThrownBy(() -> service.entra(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Partecipi già a questa partita");
+        }
+
+        @Test
+        void altraViolazioneDiIntegritaRilanciata() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+            doThrow(new DataIntegrityViolationException("altro vincolo")).when(partitaRepository).flush();
+
+            assertThatThrownBy(() -> service.entra(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(DataIntegrityViolationException.class);
+        }
+
+        @Test
+        void nonUsaFindByIdSenzaLock() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+
+            service.entra(7, TEL_ESTRANEO, false);
+
+            verify(partitaRepository, never()).findById(any());
+        }
+
+        private void stubLock(Partita p) {
+            when(partitaRepository.findByIdPerAggiornamento(p.getId())).thenReturn(Optional.of(p));
+        }
+    }
+
+    // ============================================
     // Helper
     // ============================================
     private Partita partita(StatoPartita stato, TipoPartita tipo, LocalDateTime inizio) {
@@ -379,8 +699,9 @@ class PartitaServiceTest {
         assertThat(a.getPuoRegistrareRisultato()).isFalse();
     }
 
-    private void stubEstraneo(double livello) {
+    private Utente stubEstraneo(double livello) {
         Utente estraneo = new Utente(TEL_ESTRANEO, "Anna", "Bianchi", "x", LocalDate.of(1990, 1, 1), false, livello);
         when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.of(estraneo));
+        return estraneo;
     }
 }
