@@ -8,27 +8,17 @@ import java.time.LocalTime;
 
 public class PrenotazioneDTO {
     public static class CreateRequest {
+        // Il creatore (giocatore 1) è l'utente autenticato e non viene più letto dal body:
+        // i giocatori successivi entrano con inviti e bacheca pubblica.
         @NotNull(message = "Il campo è obbligatorio") private Integer idCampo;
-        @NotBlank(message = "Il telefono del giocatore 1 è obbligatorio") private String telefonoGiocatore1;
-        private String telefonoGiocatore2;
-        private String telefonoGiocatore3;
-        private String telefonoGiocatore4;
         @NotNull(message = "La data è obbligatoria") private LocalDate dataPrenotazione;
         @NotNull(message = "L'ora di inizio è obbligatoria") private LocalTime oraInizio;
-        // Facoltativo per compatibilità con i client che non lo inviano: se assente la partita è PRIVATA.
         // Stringa e non enum, così un valore errato dà 400 con messaggio invece di un errore di parsing.
+        @NotBlank(message = "Il tipo è obbligatorio")
         @Pattern(regexp = "PUBBLICA|PRIVATA", message = "Il tipo deve essere PUBBLICA o PRIVATA") private String tipo;
         public CreateRequest() { }
         public Integer getIdCampo() { return idCampo; }
         public void setIdCampo(Integer idCampo) { this.idCampo = idCampo; }
-        public String getTelefonoGiocatore1() { return telefonoGiocatore1; }
-        public void setTelefonoGiocatore1(String value) { this.telefonoGiocatore1 = value; }
-        public String getTelefonoGiocatore2() { return telefonoGiocatore2; }
-        public void setTelefonoGiocatore2(String value) { this.telefonoGiocatore2 = value; }
-        public String getTelefonoGiocatore3() { return telefonoGiocatore3; }
-        public void setTelefonoGiocatore3(String value) { this.telefonoGiocatore3 = value; }
-        public String getTelefonoGiocatore4() { return telefonoGiocatore4; }
-        public void setTelefonoGiocatore4(String value) { this.telefonoGiocatore4 = value; }
         public LocalDate getDataPrenotazione() { return dataPrenotazione; }
         public void setDataPrenotazione(LocalDate value) { this.dataPrenotazione = value; }
         public LocalTime getOraInizio() { return oraInizio; }
@@ -49,14 +39,17 @@ public class PrenotazioneDTO {
         private LocalTime oraInizio;
         private LocalTime oraFine;
         private String stato;
+        // PUBBLICA o PRIVATA
+        private String tipo;
         public Response() { }
         public Response(Integer id, Integer idCampo, String nomeCampo, String telefonoGiocatore1,
                         String telefonoGiocatore2, String telefonoGiocatore3, String telefonoGiocatore4,
-                        LocalDate dataPrenotazione, LocalTime oraInizio, LocalTime oraFine, String stato) {
+                        LocalDate dataPrenotazione, LocalTime oraInizio, LocalTime oraFine, String stato, String tipo) {
             this.id = id; this.idCampo = idCampo; this.nomeCampo = nomeCampo;
             this.telefonoGiocatore1 = telefonoGiocatore1; this.telefonoGiocatore2 = telefonoGiocatore2;
             this.telefonoGiocatore3 = telefonoGiocatore3; this.telefonoGiocatore4 = telefonoGiocatore4;
             this.dataPrenotazione = dataPrenotazione; this.oraInizio = oraInizio; this.oraFine = oraFine; this.stato = stato;
+            this.tipo = tipo;
         }
         public Integer getId() { return id; }
         public void setId(Integer value) { this.id = value; }
@@ -80,6 +73,8 @@ public class PrenotazioneDTO {
         public void setOraFine(LocalTime value) { this.oraFine = value; }
         public String getStato() { return stato; }
         public void setStato(String value) { this.stato = value; }
+        public String getTipo() { return tipo; }
+        public void setTipo(String value) { this.tipo = value; }
     }
 
     public static class SlotResponse {

@@ -22,11 +22,8 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
-import java.util.Set;
 
 @Service
 public class PrenotazioneService {
@@ -36,9 +33,6 @@ public class PrenotazioneService {
 
     // Quanto tempo prima si può ancora cancellare una prenotazione
     private static final int LIMITE_CANCELLAZIONE_ORE = 24;
-
-    // Tipo usato quando il client non lo indica (i client esistenti non inviano il campo)
-    private static final TipoPartita TIPO_PARTITA_PREDEFINITO = TipoPartita.PRIVATA;
 
     // Nome del vincolo unico che impedisce due partite attive sullo stesso slot
     private static final String VINCOLO_SLOT_UNICO = "uk_partita_slot";
@@ -109,7 +103,9 @@ public class PrenotazioneService {
     // ============================================
     // Creazione prenotazione
     // ============================================
-    public PrenotazioneDTO.Response create(PrenotazioneDTO.CreateRequest request) {
+    // Il creatore è l'utente autenticato (telefono dal JWT) ed è l'unico giocatore iniziale:
+    // gli altri entrano dopo, tramite inviti o bacheca pubblica.
+    public PrenotazioneDTO.Response create(PrenotazioneDTO.CreateRequest request, String telefonoCreatore) {
         Campo campo = campoService.trovaCampoOLancia(request.getIdCampo());
 
         LocalTime oraInizio = request.getOraInizio();
@@ -137,22 +133,20 @@ public class PrenotazioneService {
             throw new BusinessRuleException(MESSAGGIO_SLOT_OCCUPATO);
         }
 
-        List<Utente> giocatori = trovaGiocatori(request);
+        Utente creatore = trovaUtenteOLancia(telefonoCreatore);
 
         Partita partita = new Partita();
         partita.setCampo(campo);
-        partita.setCreatore(giocatori.get(0));
+        partita.setCreatore(creatore);
         partita.setDataPartita(request.getDataPrenotazione());
         partita.setOraInizio(oraInizio);
         partita.setOraFine(oraFine);
-        partita.setTipo(request.getTipo() != null ? TipoPartita.valueOf(request.getTipo()) : TIPO_PARTITA_PREDEFINITO);
+        // Il valore è già validato dal @Pattern del DTO
+        partita.setTipo(TipoPartita.valueOf(request.getTipo()));
         partita.setStato(StatoPartita.CREATA);
 
-        // I giocatori indicati nella richiesta entrano direttamente nella partita:
-        // non sono inviti da accettare, per questo invitato = false
-        for (Utente giocatore : giocatori) {
-            partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, giocatore, false, false));
-        }
+        // Il creatore entra direttamente nella partita: non è un invito da accettare, per questo invitato = false
+        partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, creatore, false, false));
 
         Partita salvata;
         try {
@@ -334,26 +328,6 @@ public class PrenotazioneService {
         return partitaRepository.findByCampoIdAndDataPartitaAndStatoNot(idCampo, data, StatoPartita.ANNULLATA);
     }
 
-    // Giocatore 1 per primo (diventa il creatore), poi i giocatori 2-4 indicati, nell'ordine della richiesta
-    private List<Utente> trovaGiocatori(PrenotazioneDTO.CreateRequest request) {
-        List<String> telefoni = new ArrayList<>();
-        telefoni.add(request.getTelefonoGiocatore1());
-        telefoni.add(request.getTelefonoGiocatore2());
-        telefoni.add(request.getTelefonoGiocatore3());
-        telefoni.add(request.getTelefonoGiocatore4());
-
-        // Ogni utente può avere una sola partecipazione per partita (vincolo uk_partecipazione_utente)
-        Set<String> giaIndicati = new HashSet<>();
-        List<Utente> giocatori = new ArrayList<>();
-        for (String telefono : telefoni.stream().filter(Objects::nonNull).toList()) {
-            if (!giaIndicati.add(telefono)) {
-                throw new BusinessRuleException("Lo stesso giocatore non può essere indicato più di una volta");
-            }
-            giocatori.add(trovaUtenteOLancia(telefono));
-        }
-        return giocatori;
-    }
-
     // Cerca il nome del vincolo nella catena delle cause: il messaggio di MySQL lo riporta
     // (es. "Duplicate entry ... for key 'partita.uk_partita_slot'")
     private boolean violaVincolo(Throwable ex, String nomeVincolo) {
@@ -387,7 +361,8 @@ public class PrenotazioneService {
                 p.getDataPartita(),
                 p.getOraInizio(),
                 p.getOraFine(),
-                p.getStato().name().toLowerCase(Locale.ROOT)
+                p.getStato().name().toLowerCase(Locale.ROOT),
+                p.getTipo().name()
         );
     }
 }

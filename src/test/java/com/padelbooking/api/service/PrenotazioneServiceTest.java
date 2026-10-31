@@ -88,13 +88,12 @@ class PrenotazioneServiceTest {
         }
 
         @Test
-        void creaPartitaPrivataDiDefaultConCreatoreEFineDopo90Minuti() {
+        void creaPartitaConCreatoreAutenticatoEFineDopo90Minuti() {
             stubCampo(campoDiurno);
             stubNessunaPartitaAttiva(domani);
-            stubUtenti(TEL_1, TEL_2, TEL_3, TEL_4);
+            stubUtenti(TEL_1);
 
-            PrenotazioneDTO.Response r = service.create(richiesta(domani, LocalTime.of(10, 0), null,
-                    TEL_1, TEL_2, TEL_3, TEL_4));
+            PrenotazioneDTO.Response r = service.create(richiesta(domani, LocalTime.of(10, 0), "PRIVATA"), TEL_1);
 
             Partita salvata = catturaPartitaSalvata();
             assertThat(salvata.getStato()).isEqualTo(StatoPartita.CREATA);
@@ -110,6 +109,8 @@ class PrenotazioneServiceTest {
             assertThat(r.getNomeCampo()).isEqualTo("Campo Centrale");
             assertThat(r.getOraFine()).isEqualTo(LocalTime.of(11, 30));
             assertThat(r.getStato()).isEqualTo("creata");
+            assertThat(r.getTipo()).isEqualTo("PRIVATA");
+            assertThat(r.getTelefonoGiocatore1()).isEqualTo(TEL_1);
         }
 
         @Test
@@ -118,7 +119,7 @@ class PrenotazioneServiceTest {
             stubNessunaPartitaAttiva(domani);
             stubUtenti(TEL_1);
 
-            service.create(richiesta(domani, LocalTime.of(10, 0), "PUBBLICA", TEL_1, null, null, null));
+            service.create(richiesta(domani, LocalTime.of(10, 0), "PUBBLICA"), TEL_1);
 
             assertThat(catturaPartitaSalvata().getTipo()).isEqualTo(TipoPartita.PUBBLICA);
         }
@@ -129,59 +130,31 @@ class PrenotazioneServiceTest {
             stubNessunaPartitaAttiva(domani);
             stubUtenti(TEL_1);
 
-            service.create(richiesta(domani, LocalTime.of(10, 0), "PRIVATA", TEL_1, null, null, null));
+            service.create(richiesta(domani, LocalTime.of(10, 0), "PRIVATA"), TEL_1);
 
             assertThat(catturaPartitaSalvata().getTipo()).isEqualTo(TipoPartita.PRIVATA);
         }
 
         @Test
-        void creaUnaPartecipazioneUtentePerOgniGiocatoreNonInvitataNonConfermata() {
-            stubCampo(campoDiurno);
-            stubNessunaPartitaAttiva(domani);
-            stubUtenti(TEL_1, TEL_2, TEL_3, TEL_4);
-
-            service.create(richiesta(domani, LocalTime.of(10, 0), null, TEL_1, TEL_2, TEL_3, TEL_4));
-
-            Partita salvata = catturaPartitaSalvata();
-            List<Partecipazione> part = salvata.getPartecipazioni();
-            assertThat(part).hasSize(4);
-            assertThat(part).extracting(pa -> pa.getUtente().getTelefono())
-                    .containsExactly(TEL_1, TEL_2, TEL_3, TEL_4);
-            assertThat(part).allSatisfy(pa -> {
-                assertThat(pa.getTipo()).isEqualTo(TipoPartecipazione.UTENTE);
-                assertThat(pa.getInvitato()).isFalse();
-                assertThat(pa.getConfermata()).isFalse();
-                assertThat(pa.getPartita()).isSameAs(salvata);
-            });
-        }
-
-        @Test
-        void conSoloGiocatore1CreaUnaSolaPartecipazioneEGiocatoriMancantiNull() {
+        void ilCreatoreEUnicoPartecipanteUtenteNonInvitatoNonConfermato() {
             stubCampo(campoDiurno);
             stubNessunaPartitaAttiva(domani);
             stubUtenti(TEL_1);
 
-            PrenotazioneDTO.Response r = service.create(richiesta(domani, LocalTime.of(10, 0), null,
-                    TEL_1, null, null, null));
+            PrenotazioneDTO.Response r = service.create(richiesta(domani, LocalTime.of(10, 0), "PUBBLICA"), TEL_1);
 
-            assertThat(catturaPartitaSalvata().getPartecipazioni()).hasSize(1);
+            Partita salvata = catturaPartitaSalvata();
+            assertThat(salvata.getCreatore().getTelefono()).isEqualTo(TEL_1);
+            List<Partecipazione> part = salvata.getPartecipazioni();
+            assertThat(part).hasSize(1);
+            Partecipazione pa = part.get(0);
+            assertThat(pa.getUtente().getTelefono()).isEqualTo(TEL_1);
+            assertThat(pa.getTipo()).isEqualTo(TipoPartecipazione.UTENTE);
+            assertThat(pa.getInvitato()).isFalse();
+            assertThat(pa.getConfermata()).isFalse();
+            assertThat(pa.getPartita()).isSameAs(salvata);
             assertThat(r.getTelefonoGiocatore1()).isEqualTo(TEL_1);
             assertThat(r.getTelefonoGiocatore2()).isNull();
-            assertThat(r.getTelefonoGiocatore3()).isNull();
-            assertThat(r.getTelefonoGiocatore4()).isNull();
-        }
-
-        @Test
-        void giocatoriSaltatiNellaRichiestaVengonoCompattatiNellOrdine() {
-            stubCampo(campoDiurno);
-            stubNessunaPartitaAttiva(domani);
-            stubUtenti(TEL_1, TEL_3);
-
-            PrenotazioneDTO.Response r = service.create(richiesta(domani, LocalTime.of(10, 0), null,
-                    TEL_1, null, TEL_3, null));
-
-            assertThat(r.getTelefonoGiocatore1()).isEqualTo(TEL_1);
-            assertThat(r.getTelefonoGiocatore2()).isEqualTo(TEL_3);
             assertThat(r.getTelefonoGiocatore3()).isNull();
             assertThat(r.getTelefonoGiocatore4()).isNull();
         }
@@ -192,7 +165,7 @@ class PrenotazioneServiceTest {
             when(partitaRepository.findByCampoIdAndDataPartitaAndStatoNot(ID_CAMPO, domani, StatoPartita.ANNULLATA))
                     .thenReturn(List.of(partita(1, campoDiurno, utente(TEL_2), domani, LocalTime.of(10, 0), StatoPartita.CREATA)));
 
-            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(10, 0), null, TEL_1, null, null, null)))
+            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(10, 0), "PRIVATA"), TEL_1))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage(MESSAGGIO_SLOT_OCCUPATO);
             verify(partitaRepository, never()).save(any());
@@ -205,7 +178,7 @@ class PrenotazioneServiceTest {
             when(partitaRepository.findByCampoIdAndDataPartitaAndStatoNot(ID_CAMPO, domani, StatoPartita.ANNULLATA))
                     .thenReturn(List.of(partita(1, campoDiurno, utente(TEL_2), domani, LocalTime.of(18, 0), StatoPartita.CONFERMATA)));
 
-            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(18, 30), null, TEL_1, null, null, null)))
+            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(18, 30), "PRIVATA"), TEL_1))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage(MESSAGGIO_SLOT_OCCUPATO);
             verify(partitaRepository, never()).save(any());
@@ -219,7 +192,7 @@ class PrenotazioneServiceTest {
                     .thenReturn(List.of(partita(1, campoDiurno, utente(TEL_2), domani, LocalTime.of(18, 0), StatoPartita.CREATA)));
             stubUtenti(TEL_1);
 
-            PrenotazioneDTO.Response r = service.create(richiesta(domani, LocalTime.of(19, 30), null, TEL_1, null, null, null));
+            PrenotazioneDTO.Response r = service.create(richiesta(domani, LocalTime.of(19, 30), "PRIVATA"), TEL_1);
 
             assertThat(r.getOraInizio()).isEqualTo(LocalTime.of(19, 30));
         }
@@ -230,7 +203,7 @@ class PrenotazioneServiceTest {
             stubNessunaPartitaAttiva(domani);
             stubUtenti(TEL_1);
 
-            service.create(richiesta(domani, LocalTime.of(10, 0), null, TEL_1, null, null, null));
+            service.create(richiesta(domani, LocalTime.of(10, 0), "PRIVATA"), TEL_1);
 
             verify(partitaRepository).findByCampoIdAndDataPartitaAndStatoNot(ID_CAMPO, domani, StatoPartita.ANNULLATA);
         }
@@ -245,7 +218,7 @@ class PrenotazioneServiceTest {
             doThrow(new DataIntegrityViolationException("could not execute statement", causa))
                     .when(partitaRepository).save(any(Partita.class));
 
-            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(10, 0), null, TEL_1, null, null, null)))
+            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(10, 0), "PRIVATA"), TEL_1))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage(MESSAGGIO_SLOT_OCCUPATO);
         }
@@ -260,51 +233,27 @@ class PrenotazioneServiceTest {
                     new SQLIntegrityConstraintViolationException("Cannot add or update a child row: fk_partita_campo"));
             doThrow(altra).when(partitaRepository).save(any(Partita.class));
 
-            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(10, 0), null, TEL_1, null, null, null)))
+            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(10, 0), "PRIVATA"), TEL_1))
                     .isSameAs(altra);
-        }
-
-        @Test
-        void telefonoRipetutoDa409() {
-            stubCampo(campoDiurno);
-            stubNessunaPartitaAttiva(domani);
-            stubUtenti(TEL_1);
-
-            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(10, 0), null, TEL_1, TEL_1, null, null)))
-                    .isInstanceOf(BusinessRuleException.class)
-                    .hasMessage("Lo stesso giocatore non può essere indicato più di una volta");
-            verify(partitaRepository, never()).save(any());
-        }
-
-        @Test
-        void telefonoRipetutoNonConsecutivoDa409() {
-            stubCampo(campoDiurno);
-            stubNessunaPartitaAttiva(domani);
-            stubUtenti(TEL_1, TEL_2);
-
-            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(10, 0), null, TEL_1, TEL_2, null, TEL_2)))
-                    .isInstanceOf(BusinessRuleException.class);
-            verify(partitaRepository, never()).save(any());
         }
 
         @Test
         void campoInesistenteDa404() {
             when(campoService.trovaCampoOLancia(99)).thenThrow(new ResourceNotFoundException("Campo non trovato con id 99"));
-            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(10, 0), null, TEL_1, null, null, null);
+            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(10, 0), "PRIVATA");
             req.setIdCampo(99);
 
-            assertThatThrownBy(() -> service.create(req)).isInstanceOf(ResourceNotFoundException.class);
+            assertThatThrownBy(() -> service.create(req, TEL_1)).isInstanceOf(ResourceNotFoundException.class);
             verify(partitaRepository, never()).save(any());
         }
 
         @Test
-        void utenteInesistenteDa404() {
+        void creatoreInesistenteDa404() {
             stubCampo(campoDiurno);
             stubNessunaPartitaAttiva(domani);
-            stubUtenti(TEL_1);
             when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(10, 0), null, TEL_1, TEL_ESTRANEO, null, null)))
+            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(10, 0), "PRIVATA"), TEL_ESTRANEO))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessageContaining(TEL_ESTRANEO);
             verify(partitaRepository, never()).save(any());
@@ -315,7 +264,7 @@ class PrenotazioneServiceTest {
             stubCampo(campoDiurno);
 
             // 21:00 + 90' = 22:30 > chiusura 22:00
-            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(21, 0), null, TEL_1, null, null, null)))
+            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(21, 0), "PRIVATA"), TEL_1))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage("L'orario richiesto è fuori dalla fascia di apertura del campo");
         }
@@ -326,7 +275,7 @@ class PrenotazioneServiceTest {
             stubNessunaPartitaAttiva(domani);
             stubUtenti(TEL_1);
 
-            PrenotazioneDTO.Response r = service.create(richiesta(domani, LocalTime.of(20, 30), null, TEL_1, null, null, null));
+            PrenotazioneDTO.Response r = service.create(richiesta(domani, LocalTime.of(20, 30), "PRIVATA"), TEL_1);
 
             assertThat(r.getOraFine()).isEqualTo(LocalTime.of(22, 0));
         }
@@ -335,7 +284,7 @@ class PrenotazioneServiceTest {
         void slotPrimaDellAperturaDa409() {
             stubCampo(campoDiurno);
 
-            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(7, 0), null, TEL_1, null, null, null)))
+            assertThatThrownBy(() -> service.create(richiesta(domani, LocalTime.of(7, 0), "PRIVATA"), TEL_1))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage("L'orario richiesto è fuori dalla fascia di apertura del campo");
         }
@@ -347,10 +296,10 @@ class PrenotazioneServiceTest {
             when(partitaRepository.findByCampoIdAndDataPartitaAndStatoNot(2, domani, StatoPartita.ANNULLATA))
                     .thenReturn(List.of());
             stubUtenti(TEL_1);
-            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(23, 30), null, TEL_1, null, null, null);
+            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(23, 30), "PRIVATA");
             req.setIdCampo(2);
 
-            PrenotazioneDTO.Response r = service.create(req);
+            PrenotazioneDTO.Response r = service.create(req, TEL_1);
 
             assertThat(r.getOraFine()).isEqualTo(LocalTime.of(1, 0));
             assertThat(catturaPartitaSalvata().getOraFine()).isEqualTo(LocalTime.of(1, 0));
@@ -363,10 +312,10 @@ class PrenotazioneServiceTest {
             when(partitaRepository.findByCampoIdAndDataPartitaAndStatoNot(2, domani, StatoPartita.ANNULLATA))
                     .thenReturn(List.of());
             stubUtenti(TEL_1);
-            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(0, 30), null, TEL_1, null, null, null);
+            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(0, 30), "PRIVATA");
             req.setIdCampo(2);
 
-            PrenotazioneDTO.Response r = service.create(req);
+            PrenotazioneDTO.Response r = service.create(req, TEL_1);
 
             assertThat(r.getOraFine()).isEqualTo(LocalTime.of(2, 0));
         }
@@ -375,11 +324,11 @@ class PrenotazioneServiceTest {
         void campoCheChiudeDopoMezzanotteRifiutaSlotOltreLaChiusura() {
             Campo serale = new Campo(2, "Campo Serale", false, LocalTime.of(18, 0), LocalTime.of(2, 0));
             when(campoService.trovaCampoOLancia(2)).thenReturn(serale);
-            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(1, 0), null, TEL_1, null, null, null);
+            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(1, 0), "PRIVATA");
             req.setIdCampo(2);
 
             // 01:00 + 90' = 02:30 > chiusura 02:00
-            assertThatThrownBy(() -> service.create(req))
+            assertThatThrownBy(() -> service.create(req, TEL_1))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage("L'orario richiesto è fuori dalla fascia di apertura del campo");
         }
@@ -388,10 +337,10 @@ class PrenotazioneServiceTest {
         void campoCheChiudeDopoMezzanotteRifiutaSlotPrimaDellApertura() {
             Campo serale = new Campo(2, "Campo Serale", false, LocalTime.of(18, 0), LocalTime.of(2, 0));
             when(campoService.trovaCampoOLancia(2)).thenReturn(serale);
-            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(10, 0), null, TEL_1, null, null, null);
+            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(10, 0), "PRIVATA");
             req.setIdCampo(2);
 
-            assertThatThrownBy(() -> service.create(req))
+            assertThatThrownBy(() -> service.create(req, TEL_1))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage("L'orario richiesto è fuori dalla fascia di apertura del campo");
         }
@@ -403,10 +352,10 @@ class PrenotazioneServiceTest {
             // esistente 23:30-01:00, nuova 00:30-02:00
             when(partitaRepository.findByCampoIdAndDataPartitaAndStatoNot(2, domani, StatoPartita.ANNULLATA))
                     .thenReturn(List.of(partita(1, serale, utente(TEL_2), domani, LocalTime.of(23, 30), StatoPartita.CREATA)));
-            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(0, 30), null, TEL_1, null, null, null);
+            PrenotazioneDTO.CreateRequest req = richiesta(domani, LocalTime.of(0, 30), "PRIVATA");
             req.setIdCampo(2);
 
-            assertThatThrownBy(() -> service.create(req))
+            assertThatThrownBy(() -> service.create(req, TEL_1))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage(MESSAGGIO_SLOT_OCCUPATO);
         }
@@ -416,7 +365,7 @@ class PrenotazioneServiceTest {
             stubCampo(campoDiurno);
             LocalDate ieri = LocalDate.now().minusDays(1);
 
-            assertThatThrownBy(() -> service.create(richiesta(ieri, LocalTime.of(10, 0), null, TEL_1, null, null, null)))
+            assertThatThrownBy(() -> service.create(richiesta(ieri, LocalTime.of(10, 0), "PRIVATA"), TEL_1))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage("Non è possibile prenotare uno slot nel passato");
             verify(partitaRepository, never()).save(any());
@@ -427,7 +376,7 @@ class PrenotazioneServiceTest {
             stubCampo(campoDiurno);
             LocalDate ieri = LocalDate.now().minusDays(1);
 
-            assertThatThrownBy(() -> service.create(richiesta(ieri, LocalTime.of(10, 0), null, TEL_1, null, null, null)))
+            assertThatThrownBy(() -> service.create(richiesta(ieri, LocalTime.of(10, 0), "PRIVATA"), TEL_1))
                     .isInstanceOf(BusinessRuleException.class);
             verify(utenteRepository, never()).findById(anyString());
         }
@@ -800,10 +749,10 @@ class PrenotazioneServiceTest {
             stubUtenti(TEL_1);
             org.mockito.Mockito.lenient().when(partitaRepository.save(any(Partita.class)))
                     .thenAnswer(inv -> inv.getArgument(0));
-            PrenotazioneDTO.CreateRequest req = richiesta(oggi, LocalTime.of(0, 30), null, TEL_1, null, null, null);
+            PrenotazioneDTO.CreateRequest req = richiesta(oggi, LocalTime.of(0, 30), "PRIVATA");
             req.setIdCampo(2);
 
-            PrenotazioneDTO.Response r = service.create(req);
+            PrenotazioneDTO.Response r = service.create(req, TEL_1);
 
             assertThat(r.getDataPrenotazione()).isEqualTo(oggi);
             assertThat(r.getOraInizio()).isEqualTo(LocalTime.of(0, 30));
@@ -816,10 +765,10 @@ class PrenotazioneServiceTest {
             // Si usa 00:00 invece di 00:30 perché tra le 00:00 e le 00:30 lo slot delle 00:30
             // sarebbe ancora futuro e il test diventerebbe instabile.
             when(campoService.trovaCampoOLancia(2)).thenReturn(serale);
-            PrenotazioneDTO.CreateRequest req = richiesta(oggi.minusDays(1), LocalTime.of(0, 0), null, TEL_1, null, null, null);
+            PrenotazioneDTO.CreateRequest req = richiesta(oggi.minusDays(1), LocalTime.of(0, 0), "PRIVATA");
             req.setIdCampo(2);
 
-            assertThatThrownBy(() -> service.create(req))
+            assertThatThrownBy(() -> service.create(req, TEL_1))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage("Non è possibile prenotare uno slot nel passato");
             verify(partitaRepository, never()).save(any());
@@ -829,7 +778,7 @@ class PrenotazioneServiceTest {
         void postCampoNormaleNelPassatoResta409() {
             stubCampo(campoDiurno);
 
-            assertThatThrownBy(() -> service.create(richiesta(oggi.minusDays(1), LocalTime.of(20, 30), null, TEL_1, null, null, null)))
+            assertThatThrownBy(() -> service.create(richiesta(oggi.minusDays(1), LocalTime.of(20, 30), "PRIVATA"), TEL_1))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage("Non è possibile prenotare uno slot nel passato");
         }
@@ -1059,17 +1008,12 @@ class PrenotazioneServiceTest {
         return p;
     }
 
-    private static PrenotazioneDTO.CreateRequest richiesta(LocalDate data, LocalTime inizio, String tipo,
-                                                          String g1, String g2, String g3, String g4) {
+    private static PrenotazioneDTO.CreateRequest richiesta(LocalDate data, LocalTime inizio, String tipo) {
         PrenotazioneDTO.CreateRequest r = new PrenotazioneDTO.CreateRequest();
         r.setIdCampo(ID_CAMPO);
         r.setDataPrenotazione(data);
         r.setOraInizio(inizio);
         r.setTipo(tipo);
-        r.setTelefonoGiocatore1(g1);
-        r.setTelefonoGiocatore2(g2);
-        r.setTelefonoGiocatore3(g3);
-        r.setTelefonoGiocatore4(g4);
         return r;
     }
 }

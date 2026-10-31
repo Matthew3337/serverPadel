@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -67,11 +68,11 @@ class PrenotazioneControllerTest {
     @Test
     void postCreaPartitaE201ConResponse() throws Exception {
         LocalDate data = LocalDate.now().plusDays(3);
-        when(prenotazioneService.create(any())).thenReturn(new PrenotazioneDTO.Response(
+        when(prenotazioneService.create(any(), anyString())).thenReturn(new PrenotazioneDTO.Response(
                 42, 1, "Campo Centrale", TEL_1, TEL_2, null, null,
-                data, LocalTime.of(10, 0), LocalTime.of(11, 30), "creata"));
+                data, LocalTime.of(10, 0), LocalTime.of(11, 30), "creata", "PUBBLICA"));
 
-        postPrenotazione(body(data, "10:00", null))
+        postPrenotazione(body(data, "10:00", "PUBBLICA"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value(42))
                 .andExpect(jsonPath("$.idCampo").value(1))
@@ -83,105 +84,135 @@ class PrenotazioneControllerTest {
                 .andExpect(jsonPath("$.dataPrenotazione").value(data.toString()))
                 .andExpect(jsonPath("$.oraInizio").value("10:00:00"))
                 .andExpect(jsonPath("$.oraFine").value("11:30:00"))
-                .andExpect(jsonPath("$.stato").value("creata"));
+                .andExpect(jsonPath("$.stato").value("creata"))
+                .andExpect(jsonPath("$.tipo").value("PUBBLICA"));
     }
 
     @Test
-    void postSenzaTipoPassaTipoNullAlService() throws Exception {
-        when(prenotazioneService.create(any())).thenReturn(rispostaQualsiasi());
+    void postPassaAlServiceIlTelefonoDellUtenteAutenticato() throws Exception {
+        when(prenotazioneService.create(any(), anyString())).thenReturn(rispostaQualsiasi());
 
-        postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", null)).andExpect(status().isCreated());
+        postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", "PRIVATA")).andExpect(status().isCreated());
 
-        verify(prenotazioneService).create(argThat(r -> r.getTipo() == null
-                && TEL_1.equals(r.getTelefonoGiocatore1())
-                && TEL_2.equals(r.getTelefonoGiocatore2())));
+        verify(prenotazioneService).create(argThat(r -> "PRIVATA".equals(r.getTipo())), eq(TEL_1));
+    }
+
+    @Test
+    void postIgnoraITelefoniDeiGiocatoriNelBody() throws Exception {
+        // Un client vecchio che indica un altro utente come giocatore 1 non può creare partite a suo nome
+        when(prenotazioneService.create(any(), anyString())).thenReturn(rispostaQualsiasi());
+        String json = """
+                {"idCampo":1,"telefonoGiocatore1":"%s","telefonoGiocatore2":"%s","dataPrenotazione":"%s","oraInizio":"10:00","tipo":"PRIVATA"}
+                """.formatted(TEL_2, TEL_2, LocalDate.now().plusDays(3));
+
+        postPrenotazione(json).andExpect(status().isCreated());
+
+        verify(prenotazioneService).create(any(), eq(TEL_1));
+    }
+
+    @Test
+    void postSenzaTipoE400() throws Exception {
+        assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", null)),
+                400, "tipo: Il tipo è obbligatorio");
+        verify(prenotazioneService, never()).create(any(), anyString());
+    }
+
+    @Test
+    void postSenzaIdCampoE400() throws Exception {
+        String json = """
+                {"dataPrenotazione":"%s","oraInizio":"10:00","tipo":"PRIVATA"}
+                """.formatted(LocalDate.now().plusDays(3));
+        assertErrore(postPrenotazione(json), 400, "idCampo: Il campo è obbligatorio");
+        verify(prenotazioneService, never()).create(any(), anyString());
+    }
+
+    @Test
+    void postSenzaDataE400() throws Exception {
+        String json = """
+                {"idCampo":1,"oraInizio":"10:00","tipo":"PRIVATA"}
+                """;
+        assertErrore(postPrenotazione(json), 400, "dataPrenotazione: La data è obbligatoria");
+        verify(prenotazioneService, never()).create(any(), anyString());
+    }
+
+    @Test
+    void postSenzaOraInizioE400() throws Exception {
+        String json = """
+                {"idCampo":1,"dataPrenotazione":"%s","tipo":"PRIVATA"}
+                """.formatted(LocalDate.now().plusDays(3));
+        assertErrore(postPrenotazione(json), 400, "oraInizio: L'ora di inizio è obbligatoria");
+        verify(prenotazioneService, never()).create(any(), anyString());
     }
 
     @Test
     void postConTipoPubblicaE201() throws Exception {
-        when(prenotazioneService.create(any())).thenReturn(rispostaQualsiasi());
+        when(prenotazioneService.create(any(), anyString())).thenReturn(rispostaQualsiasi());
 
         postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", "PUBBLICA")).andExpect(status().isCreated());
 
-        verify(prenotazioneService).create(argThat(r -> "PUBBLICA".equals(r.getTipo())));
+        verify(prenotazioneService).create(argThat(r -> "PUBBLICA".equals(r.getTipo())), eq(TEL_1));
     }
 
     @Test
     void postConTipoNonValidoE400() throws Exception {
         assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", "AMICHEVOLE")),
                 400, "tipo: Il tipo deve essere PUBBLICA o PRIVATA");
-        verify(prenotazioneService, never()).create(any());
+        verify(prenotazioneService, never()).create(any(), anyString());
     }
 
     @Test
     void postConTipoMinuscoloE400() throws Exception {
         assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", "pubblica")),
                 400, "tipo: Il tipo deve essere PUBBLICA o PRIVATA");
-        verify(prenotazioneService, never()).create(any());
-    }
-
-    @Test
-    void postSenzaGiocatore1E400() throws Exception {
-        String json = """
-                {"idCampo":1,"dataPrenotazione":"%s","oraInizio":"10:00"}
-                """.formatted(LocalDate.now().plusDays(3));
-        assertErrore(postPrenotazione(json), 400, "telefonoGiocatore1: Il telefono del giocatore 1 è obbligatorio");
-        verify(prenotazioneService, never()).create(any());
+        verify(prenotazioneService, never()).create(any(), anyString());
     }
 
     @Test
     void postSlotOccupatoE409() throws Exception {
-        when(prenotazioneService.create(any())).thenThrow(new BusinessRuleException(MESSAGGIO_SLOT_OCCUPATO));
+        when(prenotazioneService.create(any(), anyString())).thenThrow(new BusinessRuleException(MESSAGGIO_SLOT_OCCUPATO));
 
-        assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", null)), 409, MESSAGGIO_SLOT_OCCUPATO);
-    }
-
-    @Test
-    void postTelefonoRipetutoE409() throws Exception {
-        String msg = "Lo stesso giocatore non può essere indicato più di una volta";
-        when(prenotazioneService.create(any())).thenThrow(new BusinessRuleException(msg));
-
-        assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", null)), 409, msg);
+        assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", "PRIVATA")), 409, MESSAGGIO_SLOT_OCCUPATO);
     }
 
     @Test
     void postFuoriOrarioE409() throws Exception {
         String msg = "L'orario richiesto è fuori dalla fascia di apertura del campo";
-        when(prenotazioneService.create(any())).thenThrow(new BusinessRuleException(msg));
+        when(prenotazioneService.create(any(), anyString())).thenThrow(new BusinessRuleException(msg));
 
-        assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "23:00", null)), 409, msg);
+        assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "23:00", "PRIVATA")), 409, msg);
     }
 
     @Test
     void postSlotNelPassatoE409() throws Exception {
         String msg = "Non è possibile prenotare uno slot nel passato";
-        when(prenotazioneService.create(any())).thenThrow(new BusinessRuleException(msg));
+        when(prenotazioneService.create(any(), anyString())).thenThrow(new BusinessRuleException(msg));
 
-        assertErrore(postPrenotazione(body(LocalDate.now().minusDays(1), "10:00", null)), 409, msg);
+        assertErrore(postPrenotazione(body(LocalDate.now().minusDays(1), "10:00", "PRIVATA")), 409, msg);
     }
 
     @Test
     void postCampoInesistenteE404() throws Exception {
-        when(prenotazioneService.create(any())).thenThrow(new ResourceNotFoundException("Campo non trovato con id 1"));
+        when(prenotazioneService.create(any(), anyString())).thenThrow(new ResourceNotFoundException("Campo non trovato con id 1"));
 
-        assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", null)), 404, "Campo non trovato con id 1");
+        assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", "PRIVATA")), 404, "Campo non trovato con id 1");
     }
 
     @Test
     void postUtenteInesistenteE404() throws Exception {
-        String msg = "Utente non trovato con telefono " + TEL_2;
-        when(prenotazioneService.create(any())).thenThrow(new ResourceNotFoundException(msg));
+        // L'utente del token non esiste più nel database
+        String msg = "Utente non trovato con telefono " + TEL_1;
+        when(prenotazioneService.create(any(), anyString())).thenThrow(new ResourceNotFoundException(msg));
 
-        assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", null)), 404, msg);
+        assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", "PRIVATA")), 404, msg);
     }
 
     @Test
     void postSenzaAutenticazioneVieneRifiutato() throws Exception {
         mockMvc.perform(post("/api/prenotazioni")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(body(LocalDate.now().plusDays(3), "10:00", null)))
+                        .content(body(LocalDate.now().plusDays(3), "10:00", "PRIVATA")))
                 .andExpect(status().isForbidden());
-        verify(prenotazioneService, never()).create(any());
+        verify(prenotazioneService, never()).create(any(), anyString());
     }
 
     // ============================================
@@ -288,7 +319,8 @@ class PrenotazioneControllerTest {
         mockMvc.perform(get("/api/prenotazioni/prossima").param("telefono", TEL_1).with(user(principal(TEL_1, false))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(1))
-                .andExpect(jsonPath("$.stato").value("creata"));
+                .andExpect(jsonPath("$.stato").value("creata"))
+                .andExpect(jsonPath("$.tipo").value("PRIVATA"));
     }
 
     @Test
@@ -315,26 +347,26 @@ class PrenotazioneControllerTest {
     // ============================================
     @Test
     void postJsonTroncatoE400() throws Exception {
-        assertErrore(postPrenotazione("{\"idCampo\":1,\"telefonoGiocatore1\":\"333"),
+        assertErrore(postPrenotazione("{\"idCampo\":1,\"tipo\":\"PRI"),
                 400, "Corpo della richiesta non valido: controlla che sia un JSON corretto");
-        verify(prenotazioneService, never()).create(any());
+        verify(prenotazioneService, never()).create(any(), anyString());
     }
 
     @Test
     void postJsonTroncatoTraDueCampiE400() throws Exception {
         assertErrore(postPrenotazione("{\"idCampo\":1,"),
                 400, "Corpo della richiesta non valido: controlla che sia un JSON corretto");
-        verify(prenotazioneService, never()).create(any());
+        verify(prenotazioneService, never()).create(any(), anyString());
     }
 
     @Test
     void postDataInFormatoErratoE400() throws Exception {
         String json = """
-                {"idCampo":1,"telefonoGiocatore1":"%s","dataPrenotazione":"31/10/2026","oraInizio":"10:00"}
-                """.formatted(TEL_1);
+                {"idCampo":1,"dataPrenotazione":"31/10/2026","oraInizio":"10:00","tipo":"PRIVATA"}
+                """;
         assertErrore(postPrenotazione(json), 400,
                 "Valore non valido per il campo dataPrenotazione (date nel formato AAAA-MM-GG, orari nel formato HH:MM o HH:MM:SS)");
-        verify(prenotazioneService, never()).create(any());
+        verify(prenotazioneService, never()).create(any(), anyString());
     }
 
     @Test
@@ -381,8 +413,8 @@ class PrenotazioneControllerTest {
     private static String body(LocalDate data, String oraInizio, String tipo) {
         String campoTipo = tipo == null ? "" : ",\"tipo\":\"" + tipo + "\"";
         return """
-                {"idCampo":1,"telefonoGiocatore1":"%s","telefonoGiocatore2":"%s","dataPrenotazione":"%s","oraInizio":"%s"%s}
-                """.formatted(TEL_1, TEL_2, data, oraInizio, campoTipo);
+                {"idCampo":1,"dataPrenotazione":"%s","oraInizio":"%s"%s}
+                """.formatted(data, oraInizio, campoTipo);
     }
 
     private static UtentePrincipal principal(String telefono, boolean admin) {
@@ -391,6 +423,6 @@ class PrenotazioneControllerTest {
 
     private static PrenotazioneDTO.Response rispostaQualsiasi() {
         return new PrenotazioneDTO.Response(1, 1, "Campo Centrale", TEL_1, null, null, null,
-                LocalDate.now().plusDays(3), LocalTime.of(10, 0), LocalTime.of(11, 30), "creata");
+                LocalDate.now().plusDays(3), LocalTime.of(10, 0), LocalTime.of(11, 30), "creata", "PRIVATA");
     }
 }
