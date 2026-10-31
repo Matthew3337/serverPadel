@@ -659,10 +659,327 @@ class PartitaServiceTest {
 
             verify(partitaRepository, never()).findById(any());
         }
+    }
 
-        private void stubLock(Partita p) {
-            when(partitaRepository.findByIdPerAggiornamento(p.getId())).thenReturn(Optional.of(p));
+    // ============================================
+    // Eliminazione
+    // ============================================
+    @Nested
+    class Eliminazione {
+
+        @Test
+        void adminRifiutatoCon403SenzaLeggereLaPartita() {
+            assertThatThrownBy(() -> service.elimina(7, TEL_CREATORE, true))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("L'amministratore non può eliminare le partite da qui");
+
+            verifyNoInteractions(partitaRepository);
         }
+
+        @Test
+        void inesistenteDa404() {
+            when(partitaRepository.findByIdPerAggiornamento(7)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.elimina(7, TEL_CREATORE, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void privataNonVisibileDa404() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.elimina(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void estraneoCheVedeLaPubblicaDa403() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3));
+            stubLock(p);
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.elimina(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può eliminare la partita");
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+        }
+
+        @Test
+        void partecipanteNonCreatoreDa403() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.elimina(7, TEL_2, false))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può eliminare la partita");
+        }
+
+        @Test
+        void confermataDa409() {
+            Partita p = partita(StatoPartita.CONFERMATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.elimina(7, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("La partita non è più aperta");
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CONFERMATA);
+        }
+
+        @Test
+        void giaAnnullataDa409() {
+            stubLock(partita(StatoPartita.ANNULLATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+
+            assertThatThrownBy(() -> service.elimina(7, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("La partita non è più aperta");
+        }
+
+        @Test
+        void esattamente24OrePrimaDa409EStatoInvariato() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusHours(24));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.elimina(7, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("L'eliminazione è chiusa: mancano meno di 24 ore all'inizio. "
+                            + "Solo l'amministratore può annullare la partita");
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+        }
+
+        @Test
+        void unSecondoOltreLe24OreAnnullaLaPartitaSenzaToccareIPosti() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusHours(24).plusSeconds(1));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, false));
+            stubLock(p);
+
+            service.elimina(7, TEL_CREATORE, false);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.ANNULLATA);
+            assertThat(p.getPartecipazioni()).hasSize(2);
+        }
+
+        @Test
+        void dopoMezzanotteContaLInizioEffettivo() {
+            // Campo 18:00-02:00, serata del 2 novembre alle 00:30: inizia il 3 alle 00:30, 36h30 dopo adesso.
+            // Con data_partita + ora_inizio sarebbero 12h30 e l'eliminazione verrebbe rifiutata per errore
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, LocalDateTime.of(2026, 11, 2, 0, 30));
+            p.setCampo(new Campo(2, "Campo Serale", false, LocalTime.of(18, 0), LocalTime.of(2, 0)));
+            stubLock(p);
+
+            service.elimina(7, TEL_CREATORE, false);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.ANNULLATA);
+        }
+
+        @Test
+        void nonUsaFindByIdSenzaLock() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+
+            service.elimina(7, TEL_CREATORE, false);
+
+            verify(partitaRepository, never()).findById(any());
+        }
+    }
+
+    // ============================================
+    // Uscita
+    // ============================================
+    @Nested
+    class Uscita {
+
+        @Test
+        void adminRifiutatoCon403SenzaLeggereLaPartita() {
+            assertThatThrownBy(() -> service.esci(7, TEL_2, true))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("L'amministratore non può uscire dalle partite");
+
+            verifyNoInteractions(partitaRepository);
+        }
+
+        @Test
+        void inesistenteDa404() {
+            when(partitaRepository.findByIdPerAggiornamento(7)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.esci(7, TEL_2, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void privataNonVisibileDa404() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.esci(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void estraneoCheVedeLaPubblicaDa409NonPartecipi() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.esci(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Non partecipi a questa partita");
+        }
+
+        @Test
+        void creatoreDa409() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.esci(7, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Il creatore non può uscire dalla partita: può eliminarla");
+            assertThat(p.getPartecipazioni()).hasSize(1);
+        }
+
+        @Test
+        void confermataDa409() {
+            Partita p = partita(StatoPartita.CONFERMATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, true));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.esci(7, TEL_2, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("La partita non è più aperta");
+            assertThat(p.getPartecipazioni()).hasSize(2);
+        }
+
+        @Test
+        void annullataDa409AncheSePrivata() {
+            // Il partecipante vede sempre la partita, anche annullata: quindi 409 e non 404
+            Partita p = partita(StatoPartita.ANNULLATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.esci(7, TEL_2, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("La partita non è più aperta");
+        }
+
+        @Test
+        void esattamente24OrePrimaDa409EPostoInvariato() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusHours(24));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, false));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.esci(7, TEL_2, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("L'uscita è chiusa: mancano meno di 24 ore all'inizio");
+            assertThat(p.getPartecipazioni()).hasSize(2);
+        }
+
+        @Test
+        void unSecondoOltreLe24OreRimuoveSoloLaSuaPartecipazioneEStatoInvariato() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusHours(24).plusSeconds(1));
+            Partecipazione mia = new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, false);
+            aggiungi(p, 2, mia);
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubLock(p);
+
+            service.esci(7, TEL_2, false);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+            assertThat(p.getPartecipazioni()).extracting(Partecipazione::getId).containsExactly(1, 3);
+            // Scollegata dalla partita: con orphanRemoval il flush ne cancella la riga
+            assertThat(mia.getPartita()).isNull();
+        }
+
+        @Test
+        void invitatoInPrivataPuoUscire() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            stubLock(p);
+
+            service.esci(7, TEL_2, false);
+
+            assertThat(p.getPartecipazioni()).hasSize(1);
+        }
+
+        @Test
+        void nonUsaFindByIdSenzaLock() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, false));
+            stubLock(p);
+
+            service.esci(7, TEL_2, false);
+
+            verify(partitaRepository, never()).findById(any());
+        }
+    }
+
+    // ============================================
+    // Coerenza tra azioni del dettaglio ed endpoint
+    // ============================================
+    // Per ogni scenario puoEliminare / puoUscire di GET /api/partite/{id} devono valere true
+    // esattamente quando elimina / esci vanno a buon fine
+    @Nested
+    class CoerenzaAzioni {
+
+        @Test
+        void puoEliminareCoincideConElimina() {
+            for (StatoPartita stato : StatoPartita.values()) {
+                for (LocalDateTime inizio : List.of(ADESSO.plusHours(24), ADESSO.plusHours(24).plusSeconds(1))) {
+                    for (String telefono : List.of(TEL_CREATORE, TEL_2)) {
+                        Partita dettaglio = scenario(stato, inizio);
+                        stubPartita(dettaglio);
+                        boolean puo = service.getDettaglio(7, telefono, false).getAzioni().getPuoEliminare();
+
+                        Partita perAzione = scenario(stato, inizio);
+                        when(partitaRepository.findByIdPerAggiornamento(7)).thenReturn(Optional.of(perAzione));
+                        boolean riuscita = riesce(() -> service.elimina(7, telefono, false));
+
+                        assertThat(riuscita).as("%s, inizio %s, %s", stato, inizio, telefono).isEqualTo(puo);
+                    }
+                }
+            }
+        }
+
+        @Test
+        void puoUscireCoincideConEsci() {
+            for (StatoPartita stato : StatoPartita.values()) {
+                for (LocalDateTime inizio : List.of(ADESSO.plusHours(24), ADESSO.plusHours(24).plusSeconds(1))) {
+                    for (String telefono : List.of(TEL_CREATORE, TEL_2)) {
+                        Partita dettaglio = scenario(stato, inizio);
+                        stubPartita(dettaglio);
+                        boolean puo = service.getDettaglio(7, telefono, false).getAzioni().getPuoUscire();
+
+                        Partita perAzione = scenario(stato, inizio);
+                        when(partitaRepository.findByIdPerAggiornamento(7)).thenReturn(Optional.of(perAzione));
+                        boolean riuscita = riesce(() -> service.esci(7, telefono, false));
+
+                        assertThat(riuscita).as("%s, inizio %s, %s", stato, inizio, telefono).isEqualTo(puo);
+                    }
+                }
+            }
+        }
+
+        // Partita privata con creatore e secondo giocatore: entrambi la vedono da partecipanti
+        private Partita scenario(StatoPartita stato, LocalDateTime inizio) {
+            Partita p = partita(stato, TipoPartita.PRIVATA, inizio);
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            return p;
+        }
+
+        private boolean riesce(Runnable azione) {
+            try {
+                azione.run();
+                return true;
+            } catch (AccessoNegatoException | BusinessRuleException ex) {
+                return false;
+            }
+        }
+    }
+
+    private void stubLock(Partita p) {
+        when(partitaRepository.findByIdPerAggiornamento(p.getId())).thenReturn(Optional.of(p));
     }
 
     // ============================================

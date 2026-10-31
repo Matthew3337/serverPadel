@@ -53,6 +53,16 @@ Nella risposta delle prenotazioni `id` è l'id della partita, `telefonoGiocatore
   - 403 `L'amministratore non può entrare nelle partite`.
 
   La partita viene letta con un lock in scrittura (`SELECT ... FOR UPDATE`) per tutta la transazione, quindi due ingressi simultanei sull'ultimo posto non portano a 5 giocatori; il vincolo unico `uk_partecipazione_utente` impedisce in ogni caso il doppio posto dello stesso utente.
+- `DELETE /api/partite/{id}` — il creatore elimina la partita: lo stato passa ad `annullata` per tutti (la riga resta e lo slot torna libero). Risposta 204 senza body. Errori:
+  - 404 `Partita non trovata con id {id}` se la partita non esiste o l'utente non la vede (stessa visibilità del dettaglio);
+  - 403 `Solo il creatore può eliminare la partita`, `L'amministratore non può eliminare le partite da qui`;
+  - 409 `La partita non è più aperta` (stato diverso da `creata`), `L'eliminazione è chiusa: mancano meno di 24 ore all'inizio. Solo l'amministratore può annullare la partita`.
+- `POST /api/partite/{id}/esci` — senza body: un partecipante diverso dal creatore esce dalla partita; il posto si libera e lo stato non cambia (una pubblica torna in bacheca). Risposta 204 senza body. Errori:
+  - 404 `Partita non trovata con id {id}` se la partita non esiste o l'utente non la vede;
+  - 403 `L'amministratore non può uscire dalle partite`;
+  - 409 `Non partecipi a questa partita`, `Il creatore non può uscire dalla partita: può eliminarla`, `La partita non è più aperta` (stato diverso da `creata`), `L'uscita è chiusa: mancano meno di 24 ore all'inizio`.
+
+  Le condizioni sono le stesse di `puoEliminare` e `puoUscire` del dettaglio (stesso codice nel service), con il limite stretto: a esattamente 24h dall'inizio effettivo l'operazione è già chiusa. Entrambe leggono la partita con lo stesso lock in scrittura di `entra`.
 
 ## Esempio di body per creare una prenotazione
 

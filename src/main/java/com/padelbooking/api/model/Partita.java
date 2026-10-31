@@ -77,8 +77,10 @@ public class Partita {
     private LocalDateTime dataRisultato;
 
     // Il cascade permette di salvare partita e partecipazioni con un solo save,
-    // quindi in un'unica transazione
-    @OneToMany(mappedBy = "partita", cascade = CascadeType.ALL)
+    // quindi in un'unica transazione. orphanRemoval fa cancellare dal flush la riga di una
+    // partecipazione tolta dalla lista (uscita dalla partita): senza, la riga resterebbe in tabella.
+    // Per questo la lista non va mai sostituita con setPartecipazioni su una partita gestita.
+    @OneToMany(mappedBy = "partita", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("id ASC")
     private List<Partecipazione> partecipazioni = new ArrayList<>();
 
@@ -89,6 +91,12 @@ public class Partita {
     public void aggiungiPartecipazione(Partecipazione partecipazione) {
         partecipazione.setPartita(this);
         partecipazioni.add(partecipazione);
+    }
+
+    // Togliendola dalla lista, orphanRemoval cancella la riga al flush
+    public void rimuoviPartecipazione(Partecipazione partecipazione) {
+        partecipazioni.remove(partecipazione);
+        partecipazione.setPartita(null);
     }
 
     public Integer getId() {

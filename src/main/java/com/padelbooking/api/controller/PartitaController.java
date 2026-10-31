@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-// Operazioni sulla singola partita (dettaglio e, in seguito, le azioni dei partecipanti)
+// Operazioni sulla singola partita: dettaglio, bacheca e azioni dei partecipanti
 @RestController
 @RequestMapping("/api/partite")
 public class PartitaController {
@@ -46,5 +46,25 @@ public class PartitaController {
                                                               @AuthenticationPrincipal UtentePrincipal principal) {
         boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
         return ResponseEntity.ok(partitaService.entra(id, principal.getTelefono(), isAdmin));
+    }
+
+    // Eliminazione da parte del creatore: la partita passa ad annullata, nessun body nella risposta
+    // DELETE /api/partite/7
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> elimina(@PathVariable Integer id,
+                                        @AuthenticationPrincipal UtentePrincipal principal) {
+        boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
+        partitaService.elimina(id, principal.getTelefono(), isAdmin);
+        return ResponseEntity.noContent().build();
+    }
+
+    // Uscita di un partecipante diverso dal creatore, senza body: il posto si libera
+    // POST /api/partite/7/esci
+    @PostMapping("/{id}/esci")
+    public ResponseEntity<Void> esci(@PathVariable Integer id,
+                                     @AuthenticationPrincipal UtentePrincipal principal) {
+        boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
+        partitaService.esci(id, principal.getTelefono(), isAdmin);
+        return ResponseEntity.noContent().build();
     }
 }

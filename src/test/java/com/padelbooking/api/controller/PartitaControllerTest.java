@@ -27,12 +27,15 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -227,6 +230,126 @@ class PartitaControllerTest {
         mockMvc.perform(post("/api/partite/7/entra")).andExpect(status().isForbidden());
 
         verify(partitaService, never()).entra(anyInt(), anyString(), anyBoolean());
+    }
+
+    // ============================================
+    // Eliminazione
+    // ============================================
+
+    @Test
+    void elimina204SenzaBody() throws Exception {
+        mockMvc.perform(delete("/api/partite/7").with(user(principal(TEL_1, false))))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+        verify(partitaService).elimina(7, TEL_1, false);
+    }
+
+    @Test
+    void elimina409ConFormatoErrore() throws Exception {
+        String messaggio = "L'eliminazione è chiusa: mancano meno di 24 ore all'inizio. "
+                + "Solo l'amministratore può annullare la partita";
+        doThrow(new BusinessRuleException(messaggio)).when(partitaService).elimina(7, TEL_1, false);
+
+        mockMvc.perform(delete("/api/partite/7").with(user(principal(TEL_1, false))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.timestamp").value(notNullValue()))
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.errore").value(messaggio))
+                .andExpect(jsonPath("$.length()").value(3));
+    }
+
+    @Test
+    void elimina403PerNonCreatore() throws Exception {
+        doThrow(new AccessoNegatoException("Solo il creatore può eliminare la partita"))
+                .when(partitaService).elimina(7, TEL_1, false);
+
+        mockMvc.perform(delete("/api/partite/7").with(user(principal(TEL_1, false))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.errore").value("Solo il creatore può eliminare la partita"));
+    }
+
+    @Test
+    void elimina403PerAdminPassaIsAdminAlService() throws Exception {
+        doThrow(new AccessoNegatoException("L'amministratore non può eliminare le partite da qui"))
+                .when(partitaService).elimina(7, TEL_1, true);
+
+        mockMvc.perform(delete("/api/partite/7").with(user(principal(TEL_1, true))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.errore").value("L'amministratore non può eliminare le partite da qui"));
+    }
+
+    @Test
+    void elimina404ConFormatoErrore() throws Exception {
+        doThrow(new ResourceNotFoundException("Partita non trovata con id 7"))
+                .when(partitaService).elimina(7, TEL_1, false);
+
+        mockMvc.perform(delete("/api/partite/7").with(user(principal(TEL_1, false))))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.errore").value("Partita non trovata con id 7"));
+    }
+
+    @Test
+    void eliminaSenzaAutenticazioneRifiutato() throws Exception {
+        mockMvc.perform(delete("/api/partite/7")).andExpect(status().isForbidden());
+
+        verify(partitaService, never()).elimina(anyInt(), anyString(), anyBoolean());
+    }
+
+    // ============================================
+    // Uscita
+    // ============================================
+
+    @Test
+    void esci204SenzaBody() throws Exception {
+        mockMvc.perform(post("/api/partite/7/esci").with(user(principal(TEL_1, false))))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+        verify(partitaService).esci(7, TEL_1, false);
+    }
+
+    @Test
+    void esci409ConFormatoErrore() throws Exception {
+        doThrow(new BusinessRuleException("Non partecipi a questa partita"))
+                .when(partitaService).esci(7, TEL_1, false);
+
+        mockMvc.perform(post("/api/partite/7/esci").with(user(principal(TEL_1, false))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.timestamp").value(notNullValue()))
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.errore").value("Non partecipi a questa partita"))
+                .andExpect(jsonPath("$.length()").value(3));
+    }
+
+    @Test
+    void esci403PerAdminPassaIsAdminAlService() throws Exception {
+        doThrow(new AccessoNegatoException("L'amministratore non può uscire dalle partite"))
+                .when(partitaService).esci(7, TEL_1, true);
+
+        mockMvc.perform(post("/api/partite/7/esci").with(user(principal(TEL_1, true))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.errore").value("L'amministratore non può uscire dalle partite"));
+    }
+
+    @Test
+    void esci404ConFormatoErrore() throws Exception {
+        doThrow(new ResourceNotFoundException("Partita non trovata con id 7"))
+                .when(partitaService).esci(7, TEL_1, false);
+
+        mockMvc.perform(post("/api/partite/7/esci").with(user(principal(TEL_1, false))))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.errore").value("Partita non trovata con id 7"));
+    }
+
+    @Test
+    void esciSenzaAutenticazioneRifiutato() throws Exception {
+        mockMvc.perform(post("/api/partite/7/esci")).andExpect(status().isForbidden());
+
+        verify(partitaService, never()).esci(anyInt(), anyString(), anyBoolean());
     }
 
     private static UtentePrincipal principal(String telefono, boolean admin) {
