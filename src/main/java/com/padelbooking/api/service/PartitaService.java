@@ -43,6 +43,19 @@ public class PartitaService {
     private static final String MESSAGGIO_NON_PIU_APERTA = "La partita non è più aperta";
     private static final String MESSAGGIO_ADMIN_NON_GIOCA = "L'amministratore non può entrare nelle partite";
 
+    // Messaggi di eliminazione e uscita (RNF_U_3): fanno parte del contratto con il client
+    private static final String MESSAGGIO_ADMIN_NON_ELIMINA = "L'amministratore non può eliminare le partite da qui";
+    private static final String MESSAGGIO_SOLO_CREATORE_ELIMINA = "Solo il creatore può eliminare la partita";
+    // UC_GP_6, flusso di errore 2.1.1: oltre il limite si indica che resta solo l'annullamento dell'admin
+    private static final String MESSAGGIO_ELIMINAZIONE_CHIUSA =
+            "L'eliminazione è chiusa: mancano meno di " + RegoleTempoPartita.getLimiteModificheOre()
+                    + " ore all'inizio. Solo l'amministratore può annullare la partita";
+    private static final String MESSAGGIO_ADMIN_NON_ESCE = "L'amministratore non può uscire dalle partite";
+    private static final String MESSAGGIO_NON_PARTECIPI = "Non partecipi a questa partita";
+    private static final String MESSAGGIO_CREATORE_NON_ESCE = "Il creatore non può uscire dalla partita: può eliminarla";
+    private static final String MESSAGGIO_USCITA_CHIUSA =
+            "L'uscita è chiusa: mancano meno di " + RegoleTempoPartita.getLimiteModificheOre() + " ore all'inizio";
+
     private final PartitaRepository partitaRepository;
     private final UtenteRepository utenteRepository;
     private final Clock clock;
@@ -170,8 +183,120 @@ public class PartitaService {
     }
 
     // ============================================
+    // Eliminazione della partita
+    // ============================================
+    // RF_GP_14, RF_GP_15: il creatore elimina la partita fino a 24 ore prima dell'inizio e la partita
+    // passa ad ANNULLATA per tutti. La riga resta in tabella: con stato ANNULLATA la colonna generata
+    // slot_attivo diventa NULL e lo slot torna prenotabile. L'admin annulla dalla sua gestione (T11).
+    @Transactional
+    public void elimina(Integer idPartita, String telefonoRichiedente, boolean isAdmin) {
+        if (isAdmin) {
+            throw new AccessoNegatoException(MESSAGGIO_ADMIN_NON_ELIMINA);
+        }
+
+        // Lock come prima lettura, come in entra: un ingresso concorrente aspetta la fine di questa
+        // transazione e poi trova la partita ANNULLATA, invece di entrare in una partita appena eliminata
+        Partita partita = partitaRepository.findByIdPerAggiornamento(idPartita)
+                .orElseThrow(() -> partitaNonTrovata(idPartita));
+        Partecipazione partecipazione = verificaVisibileOLancia(partita, telefonoRichiedente);
+
+        LocalDateTime adesso = LocalDateTime.now(clock);
+        Optional<RuntimeException> rifiuto = rifiutoEliminazione(partita, partecipazione, adesso);
+        if (rifiuto.isPresent()) {
+            throw rifiuto.get();
+        }
+
+        // La partita è gestita dall'EntityManager: il cambio di stato lo scrive il dirty checking al commit
+        partita.setStato(StatoPartita.ANNULLATA);
+
+        // T13: notifiche di annullamento (RF_GN_3, RF_GN_7)
+    }
+
+    // ============================================
+    // Uscita dalla partita
+    // ============================================
+    // RF_GP_16, RF_GP_17: un partecipante diverso dal creatore esce fino a 24 ore prima dell'inizio.
+    // Il posto si libera e lo stato della partita non cambia: una pubblica torna in bacheca.
+    @Transactional
+    public void esci(Integer idPartita, String telefonoRichiedente, boolean isAdmin) {
+        if (isAdmin) {
+            throw new AccessoNegatoException(MESSAGGIO_ADMIN_NON_ESCE);
+        }
+
+        // Lock come prima lettura, come in entra: uscita e ingresso sulla stessa partita si serializzano,
+        // quindi il conteggio dei posti di un ingresso concorrente vede già il posto liberato
+        Partita partita = partitaRepository.findByIdPerAggiornamento(idPartita)
+                .orElseThrow(() -> partitaNonTrovata(idPartita));
+        Partecipazione partecipazione = verificaVisibileOLancia(partita, telefonoRichiedente);
+
+        LocalDateTime adesso = LocalDateTime.now(clock);
+        Optional<RuntimeException> rifiuto = rifiutoUscita(partita, partecipazione, adesso);
+        if (rifiuto.isPresent()) {
+            throw rifiuto.get();
+        }
+
+        // orphanRemoval su Partita.partecipazioni: togliere la partecipazione dalla lista ne cancella
+        // la riga al flush del commit, così il vincolo unico uk_partecipazione_utente non blocca
+        // un nuovo ingresso dello stesso utente
+        partita.rimuoviPartecipazione(partecipazione);
+    }
+
+    // ============================================
     // Helper privati
     // ============================================
+
+    // Stessa visibilità di GET /api/partite/{id} per chi non è admin: chi partecipa vede sempre la partita,
+    // gli altri solo se la vedrebbero in dettaglio, altrimenti 404. Restituisce la partecipazione
+    // del richiedente, null se non partecipa.
+    private Partecipazione verificaVisibileOLancia(Partita partita, String telefonoRichiedente) {
+        Optional<Partecipazione> partecipazione = trovaPartecipazioneUtente(partita, telefonoRichiedente);
+        if (partecipazione.isEmpty()
+                && !visibileDaNonPartecipante(partita, utenteRepository.findById(telefonoRichiedente).orElse(null))) {
+            throw partitaNonTrovata(partita.getId());
+        }
+        return partecipazione.orElse(null);
+    }
+
+    // Motivo per cui il richiedente (non admin, partita già visibile) non può eliminare la partita,
+    // vuoto se può. Lo usano sia elimina sia calcolaAzioni per puoEliminare: le condizioni stanno
+    // in un solo punto, così il bottone del dettaglio e l'endpoint non possono divergere.
+    private Optional<RuntimeException> rifiutoEliminazione(Partita partita, Partecipazione partecipazione,
+                                                           LocalDateTime adesso) {
+        if (!eCreatore(partita, partecipazione)) {
+            return Optional.of(new AccessoNegatoException(MESSAGGIO_SOLO_CREATORE_ELIMINA));
+        }
+        if (partita.getStato() != StatoPartita.CREATA) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_NON_PIU_APERTA));
+        }
+        if (!RegoleTempoPartita.primaDelLimiteModifiche(partita, adesso)) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_ELIMINAZIONE_CHIUSA));
+        }
+        return Optional.empty();
+    }
+
+    // Come rifiutoEliminazione, per l'uscita: condivisa da esci e da puoUscire
+    private Optional<RuntimeException> rifiutoUscita(Partita partita, Partecipazione partecipazione,
+                                                     LocalDateTime adesso) {
+        if (partecipazione == null) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_NON_PARTECIPI));
+        }
+        if (eCreatore(partita, partecipazione)) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_CREATORE_NON_ESCE));
+        }
+        if (partita.getStato() != StatoPartita.CREATA) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_NON_PIU_APERTA));
+        }
+        if (!RegoleTempoPartita.primaDelLimiteModifiche(partita, adesso)) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_USCITA_CHIUSA));
+        }
+        return Optional.empty();
+    }
+
+    // Creatore = il richiedente occupa il posto UTENTE del creatore
+    private boolean eCreatore(Partita partita, Partecipazione partecipazione) {
+        return partecipazione != null
+                && partecipazione.getUtente().getTelefono().equals(partita.getCreatore().getTelefono());
+    }
 
     // Un non partecipante vede solo le pubbliche non annullate di livello compatibile (RF_GP_9).
     // richiedente è null se il telefono del token non corrisponde più a un utente.
@@ -201,16 +326,15 @@ public class PartitaService {
     // dallo stato e dall'istante attuale rispetto all'inizio e alla fine effettivi
     private PartitaDTO.AzioniResponse calcolaAzioni(Partita partita, Partecipazione partecipazione, LocalDateTime adesso) {
         boolean partecipante = partecipazione != null;
-        boolean creatore = partecipante
-                && partecipazione.getUtente().getTelefono().equals(partita.getCreatore().getTelefono());
+        boolean creatore = eCreatore(partita, partecipazione);
         boolean creata = partita.getStato() == StatoPartita.CREATA;
         boolean confermata = partita.getStato() == StatoPartita.CONFERMATA;
         boolean primaDelLimite = RegoleTempoPartita.primaDelLimiteModifiche(partita, adesso);
 
         boolean puoInvitare = creatore && creata && primaDelLimite
                 && partita.getPartecipazioni().size() < POSTI_MAX;
-        boolean puoEliminare = creatore && creata && primaDelLimite;
-        boolean puoUscire = partecipante && !creatore && creata && primaDelLimite;
+        boolean puoEliminare = rifiutoEliminazione(partita, partecipazione, adesso).isEmpty();
+        boolean puoUscire = rifiutoUscita(partita, partecipazione, adesso).isEmpty();
         boolean puoConfermare = partecipante && !Boolean.TRUE.equals(partecipazione.getConfermata())
                 && creata && RegoleTempoPartita.inFinestraConferma(partita, adesso);
         boolean puoRegistrareRisultato = partecipante && confermata
