@@ -34,25 +34,21 @@ L'utente admin inserito via seed ha come password l'hash placeholder presente ne
 
 ### Prenotazioni (richiedono header `Authorization: Bearer <token>`)
 - `GET /api/prenotazioni/slot-disponibili?idCampo=1&data=2026-07-10` — uno slot è occupato se si sovrappone a una partita non annullata
-- `POST /api/prenotazioni` — crea una partita (stato `creata`) con il giocatore 1 come creatore; i giocatori 2-4 indicati entrano direttamente nella partita. Campo opzionale `tipo`: `"PUBBLICA"` o `"PRIVATA"` (default `PRIVATA`). Slot già occupato: 409
+- `POST /api/prenotazioni` — crea una partita (stato `creata`, durata 90 minuti) il cui creatore e unico giocatore iniziale è l'utente autenticato; gli altri giocatori entreranno tramite inviti o bacheca pubblica. Body: `idCampo`, `dataPrenotazione`, `oraInizio`, `tipo` (obbligatorio, `"PUBBLICA"` o `"PRIVATA"`); eventuali `telefonoGiocatore1..4` vengono ignorati. Risposta 201. Errori: 400 validazione, 404 campo inesistente, 409 slot occupato / fuori orario di apertura / slot nel passato
 - `DELETE /api/prenotazioni/{id}` — annulla la partita (stato `annullata`, la riga resta e lo slot torna libero): creatore almeno 24h prima dell'inizio, admin sempre. Partita già annullata o già giocata: 409
 - `GET /api/prenotazioni/prossima?telefono=3331234567` — prossima partita non annullata in cui l'utente gioca, dato il telefono
 - `GET /api/prenotazioni/utente/{telefono}` — partite non annullate in cui l'utente gioca
 
-Nella risposta delle prenotazioni `id` è l'id della partita, `telefonoGiocatore1` il creatore, `telefonoGiocatore2..4` gli altri giocatori (null se mancano), `dataPrenotazione` la data della partita e `stato` lo stato in minuscolo (`creata`, `confermata`, `annullata`, `giocata`).
+Nella risposta delle prenotazioni `id` è l'id della partita, `telefonoGiocatore1` il creatore, `telefonoGiocatore2..4` gli altri giocatori (null se mancano), `dataPrenotazione` la data della partita e `stato` lo stato in minuscolo (`creata`, `confermata`, `annullata`, `giocata`) e `tipo` il tipo della partita (`PUBBLICA` o `PRIVATA`).
 
 ## Esempio di body per creare una prenotazione
 
 ```json
 {
   "idCampo": 1,
-  "telefonoGiocatore1": "3331234567",
-  "telefonoGiocatore2": "3339876543",
-  "telefonoGiocatore3": null,
-  "telefonoGiocatore4": null,
   "dataPrenotazione": "2026-07-10",
-  "oraInizio": "10:00:00",
-  "tipo": "PRIVATA"
+  "oraInizio": "10:00",
+  "tipo": "PUBBLICA"
 }
 ```
 

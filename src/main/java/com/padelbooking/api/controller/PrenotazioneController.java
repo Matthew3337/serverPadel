@@ -31,9 +31,12 @@ public class PrenotazioneController {
         return ResponseEntity.ok(prenotazioneService.getSlotDisponibili(idCampo, data));
     }
 
+    // Il creatore è l'utente autenticato, non un telefono indicato nel body
     @PostMapping
-    public ResponseEntity<PrenotazioneDTO.Response> create(@Valid @RequestBody PrenotazioneDTO.CreateRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(prenotazioneService.create(request));
+    public ResponseEntity<PrenotazioneDTO.Response> create(@Valid @RequestBody PrenotazioneDTO.CreateRequest request,
+                                                           @AuthenticationPrincipal UtentePrincipal principal) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(prenotazioneService.create(request, principal.getTelefono()));
     }
 
     @DeleteMapping("/{id}")
