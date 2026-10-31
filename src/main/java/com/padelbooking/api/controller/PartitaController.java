@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-// Operazioni sulla singola partita: dettaglio, bacheca e azioni dei partecipanti
+// Operazioni sulla singola partita: dettaglio, bacheca, storico e azioni dei partecipanti
 @RestController
 @RequestMapping("/api/partite")
 public class PartitaController {
@@ -28,6 +28,16 @@ public class PartitaController {
             @AuthenticationPrincipal UtentePrincipal principal) {
         boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
         return ResponseEntity.ok(partitaService.getBachecaPubbliche(principal.getTelefono(), isAdmin));
+    }
+
+    // Storico delle partite non annullate dell'utente autenticato, dalla più recente.
+    // Come "pubbliche", il path letterale ha la precedenza su /{id}
+    // GET /api/partite/storico
+    @GetMapping("/storico")
+    public ResponseEntity<List<PartitaDTO.StoricoResponse>> getStorico(
+            @AuthenticationPrincipal UtentePrincipal principal) {
+        boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
+        return ResponseEntity.ok(partitaService.getStorico(principal.getTelefono(), isAdmin));
     }
 
     // Dettaglio con posti e azioni disponibili per l'utente autenticato

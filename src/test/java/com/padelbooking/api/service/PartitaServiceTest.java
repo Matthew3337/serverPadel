@@ -11,6 +11,7 @@ import com.padelbooking.api.model.StatoPartita;
 import com.padelbooking.api.model.TipoPartecipazione;
 import com.padelbooking.api.model.TipoPartita;
 import com.padelbooking.api.model.Utente;
+import com.padelbooking.api.repository.PartecipazioneRepository;
 import com.padelbooking.api.repository.PartitaRepository;
 import com.padelbooking.api.repository.UtenteRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,6 +53,9 @@ class PartitaServiceTest {
     private PartitaRepository partitaRepository;
 
     @Mock
+    private PartecipazioneRepository partecipazioneRepository;
+
+    @Mock
     private UtenteRepository utenteRepository;
 
     private PartitaService service;
@@ -63,7 +67,7 @@ class PartitaServiceTest {
     @BeforeEach
     void setUp() {
         Clock fisso = Clock.fixed(ADESSO.atZone(ZONA).toInstant(), ZONA);
-        service = new PartitaService(partitaRepository, utenteRepository, fisso);
+        service = new PartitaService(partitaRepository, partecipazioneRepository, utenteRepository, fisso);
         campoDiurno = new Campo(1, "Campo 1", true, LocalTime.of(8, 0), LocalTime.of(22, 0));
         creatore = new Utente(TEL_CREATORE, "Mario", "Rossi", "x", LocalDate.of(1990, 1, 1), false, 2.5);
         secondo = new Utente(TEL_2, "Luigi", "Verdi", "x", LocalDate.of(1990, 1, 1), false, 3.0);
@@ -975,6 +979,220 @@ class PartitaServiceTest {
             } catch (AccessoNegatoException | BusinessRuleException ex) {
                 return false;
             }
+        }
+    }
+
+    // ============================================
+    // Storico
+    // ============================================
+    @Nested
+    class Storico {
+
+        @Test
+        void adminRiceveListaVuotaSenzaInterrogareIlDb() {
+            assertThat(service.getStorico(TEL_ESTRANEO, true)).isEmpty();
+
+            verifyNoInteractions(partecipazioneRepository);
+        }
+
+        @Test
+        void usaLaQueryConUtenteEdEscludeAnnullate() {
+            when(partecipazioneRepository.findStoricoByTelefono(TEL_CREATORE, TipoPartecipazione.UTENTE,
+                    StatoPartita.ANNULLATA)).thenReturn(List.of());
+
+            assertThat(service.getStorico(TEL_CREATORE, false)).isEmpty();
+
+            verify(partecipazioneRepository).findStoricoByTelefono(TEL_CREATORE, TipoPartecipazione.UTENTE,
+                    StatoPartita.ANNULLATA);
+            verifyNoInteractions(partitaRepository);
+        }
+
+        @Test
+        void formatoDellaRigaSenzaRisultato() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, LocalDateTime.of(2026, 11, 5, 18, 0));
+            stubStorico(p.getPartecipazioni().get(0));
+
+            List<PartitaDTO.StoricoResponse> r = service.getStorico(TEL_CREATORE, false);
+
+            assertThat(r).hasSize(1);
+            PartitaDTO.StoricoResponse riga = r.get(0);
+            assertThat(riga.getId()).isEqualTo(7);
+            assertThat(riga.getIdCampo()).isEqualTo(1);
+            assertThat(riga.getNomeCampo()).isEqualTo("Campo 1");
+            assertThat(riga.getDataPartita()).isEqualTo(LocalDate.of(2026, 11, 5));
+            assertThat(riga.getOraInizio()).isEqualTo(LocalTime.of(18, 0));
+            assertThat(riga.getOraFine()).isEqualTo(LocalTime.of(19, 30));
+            assertThat(riga.getStato()).isEqualTo("creata");
+            assertThat(riga.getTipo()).isEqualTo("PRIVATA");
+            assertThat(riga.getRisultato()).isNull();
+        }
+
+        @Test
+        void unSoloSetNonERisultatoRegistrato() {
+            Partita p = partita(StatoPartita.CONFERMATA, TipoPartita.PUBBLICA, ADESSO.minusDays(1));
+            p.setSet1Sq1(6);
+            p.setSet1Sq2(4);
+            stubStorico(p.getPartecipazioni().get(0));
+
+            assertThat(service.getStorico(TEL_CREATORE, false).get(0).getRisultato()).isNull();
+        }
+
+        @Test
+        void dueSetVintiDallaSquadraDellUtente() {
+            Partecipazione pa = giocataConSet(1, 12, 6, 4, 6, 3, null, null);
+
+            PartitaDTO.RisultatoResponse r = service.getStorico(TEL_CREATORE, false).get(0).getRisultato();
+
+            assertThat(r.getSet()).hasSize(2);
+            assertThat(r.getSet().get(0).getSquadra1()).isEqualTo(6);
+            assertThat(r.getSet().get(0).getSquadra2()).isEqualTo(4);
+            assertThat(r.getSet().get(1).getSquadra1()).isEqualTo(6);
+            assertThat(r.getSet().get(1).getSquadra2()).isEqualTo(3);
+            assertThat(r.getSquadraUtente()).isEqualTo(1);
+            assertThat(r.getEsito()).isEqualTo("VINTA");
+            assertThat(r.getPuntiAssegnati()).isEqualTo(12);
+            assertThat(pa.getPartita().getStato()).isEqualTo(StatoPartita.GIOCATA);
+        }
+
+        @Test
+        void dueSetPersiDallaSquadraDellUtente() {
+            giocataConSet(1, -8, 2, 6, 4, 6, null, null);
+
+            PartitaDTO.RisultatoResponse r = service.getStorico(TEL_CREATORE, false).get(0).getRisultato();
+
+            assertThat(r.getSet()).hasSize(2);
+            assertThat(r.getEsito()).isEqualTo("PERSA");
+            assertThat(r.getPuntiAssegnati()).isEqualTo(-8);
+        }
+
+        @Test
+        void treSetVintiDallaSquadraUno() {
+            giocataConSet(1, 12, 6, 4, 3, 6, 6, 2);
+
+            PartitaDTO.RisultatoResponse r = service.getStorico(TEL_CREATORE, false).get(0).getRisultato();
+
+            assertThat(r.getSet()).hasSize(3);
+            assertThat(r.getSet().get(2).getSquadra1()).isEqualTo(6);
+            assertThat(r.getSet().get(2).getSquadra2()).isEqualTo(2);
+            assertThat(r.getEsito()).isEqualTo("VINTA");
+        }
+
+        @Test
+        void treSetVintiDallaSquadraDueVistiDallaSquadraDue() {
+            giocataConSet(2, 10, 6, 4, 3, 6, 2, 6);
+
+            PartitaDTO.RisultatoResponse r = service.getStorico(TEL_CREATORE, false).get(0).getRisultato();
+
+            assertThat(r.getSet()).hasSize(3);
+            assertThat(r.getSquadraUtente()).isEqualTo(2);
+            assertThat(r.getEsito()).isEqualTo("VINTA");
+        }
+
+        @Test
+        void treSetPersiDallaSquadraDellUtente() {
+            giocataConSet(2, -5, 6, 4, 3, 6, 6, 2);
+
+            assertThat(service.getStorico(TEL_CREATORE, false).get(0).getRisultato().getEsito()).isEqualTo("PERSA");
+        }
+
+        @Test
+        void senzaSquadraEsitoESquadraNullMaSetPresenti() {
+            giocataConSet(null, null, 6, 4, 6, 3, null, null);
+
+            PartitaDTO.RisultatoResponse r = service.getStorico(TEL_CREATORE, false).get(0).getRisultato();
+
+            assertThat(r.getSet()).hasSize(2);
+            assertThat(r.getSquadraUtente()).isNull();
+            assertThat(r.getEsito()).isNull();
+            assertThat(r.getPuntiAssegnati()).isNull();
+        }
+
+        @Test
+        void puntiNonAncoraCalcolatiSonoNull() {
+            giocataConSet(1, null, 6, 4, 6, 3, null, null);
+
+            PartitaDTO.RisultatoResponse r = service.getStorico(TEL_CREATORE, false).get(0).getRisultato();
+
+            assertThat(r.getEsito()).isEqualTo("VINTA");
+            assertThat(r.getPuntiAssegnati()).isNull();
+        }
+
+        @Test
+        void setVintiPariRisultatoPresenteConEsitoNull() {
+            // Lo schema ammette 1-1 senza terzo set: il risultato si mostra, ma senza un vincitore
+            // l'esito resta null invece di essere indovinato
+            giocataConSet(1, null, 6, 4, 4, 6, null, null);
+
+            PartitaDTO.RisultatoResponse r = service.getStorico(TEL_CREATORE, false).get(0).getRisultato();
+
+            assertThat(r).isNotNull();
+            assertThat(r.getSet()).hasSize(2);
+            assertThat(r.getSquadraUtente()).isEqualTo(1);
+            assertThat(r.getEsito()).isNull();
+        }
+
+        @Test
+        void statoConfermataInMinuscoloETipoPubblica() {
+            Partita p = partita(StatoPartita.CONFERMATA, TipoPartita.PUBBLICA, ADESSO.plusHours(10));
+            stubStorico(p.getPartecipazioni().get(0));
+
+            PartitaDTO.StoricoResponse riga = service.getStorico(TEL_CREATORE, false).get(0);
+
+            assertThat(riga.getStato()).isEqualTo("confermata");
+            assertThat(riga.getTipo()).isEqualTo("PUBBLICA");
+            assertThat(riga.getRisultato()).isNull();
+        }
+
+        @Test
+        void ordinatoPerInizioEffettivoDecrescenteAncheDopoMezzanotte() {
+            // Campo aperto dalle 18:00 alle 02:00: lo slot delle 00:30 della serata del 5 inizia il 6
+            Campo notturno = new Campo(2, "Campo notte", true, LocalTime.of(18, 0), LocalTime.of(2, 0));
+            Partita serata = partitaConId(10, notturno, LocalDate.of(2026, 11, 5), LocalTime.of(18, 0));
+            Partita dopoMezzanotte = partitaConId(11, notturno, LocalDate.of(2026, 11, 5), LocalTime.of(0, 30));
+            Partita passata = partitaConId(12, campoDiurno, LocalDate.of(2026, 10, 20), LocalTime.of(10, 0));
+            Partita futura = partitaConId(13, campoDiurno, LocalDate.of(2026, 11, 20), LocalTime.of(10, 0));
+            // Stesso inizio di "serata" su un altro campo: a parità vince l'id più alto
+            Partita stessoInizio = partitaConId(14, campoDiurno, LocalDate.of(2026, 11, 5), LocalTime.of(18, 0));
+            when(partecipazioneRepository.findStoricoByTelefono(TEL_CREATORE, TipoPartecipazione.UTENTE,
+                    StatoPartita.ANNULLATA)).thenReturn(List.of(
+                    serata.getPartecipazioni().get(0), passata.getPartecipazioni().get(0),
+                    dopoMezzanotte.getPartecipazioni().get(0), stessoInizio.getPartecipazioni().get(0),
+                    futura.getPartecipazioni().get(0)));
+
+            List<Integer> ids = service.getStorico(TEL_CREATORE, false).stream()
+                    .map(PartitaDTO.StoricoResponse::getId)
+                    .toList();
+
+            assertThat(ids).containsExactly(13, 11, 14, 10, 12);
+        }
+
+        // Partita giocata con i set indicati (null = set non giocato) e la squadra e i punti del creatore
+        private Partecipazione giocataConSet(Integer squadra, Integer punti, Integer s1a, Integer s1b,
+                                             Integer s2a, Integer s2b, Integer s3a, Integer s3b) {
+            Partita p = partita(StatoPartita.GIOCATA, TipoPartita.PUBBLICA, ADESSO.minusDays(2));
+            p.setSet1Sq1(s1a);
+            p.setSet1Sq2(s1b);
+            p.setSet2Sq1(s2a);
+            p.setSet2Sq2(s2b);
+            p.setSet3Sq1(s3a);
+            p.setSet3Sq2(s3b);
+            Partecipazione pa = p.getPartecipazioni().get(0);
+            pa.setSquadra(squadra);
+            pa.setPuntiAssegnati(punti);
+            stubStorico(pa);
+            return pa;
+        }
+
+        private Partita partitaConId(int id, Campo campo, LocalDate data, LocalTime ora) {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, LocalDateTime.of(data, ora));
+            p.setId(id);
+            p.setCampo(campo);
+            return p;
+        }
+
+        private void stubStorico(Partecipazione pa) {
+            when(partecipazioneRepository.findStoricoByTelefono(TEL_CREATORE, TipoPartecipazione.UTENTE,
+                    StatoPartita.ANNULLATA)).thenReturn(List.of(pa));
         }
     }
 

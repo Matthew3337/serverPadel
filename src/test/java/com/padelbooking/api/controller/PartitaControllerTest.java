@@ -167,6 +167,85 @@ class PartitaControllerTest {
     }
 
     // ============================================
+    // Storico
+    // ============================================
+
+    @Test
+    void getStorico200ConFormatoDelContrattoENonPassaDalDettaglio() throws Exception {
+        PartitaDTO.RisultatoResponse risultato = new PartitaDTO.RisultatoResponse(
+                List.of(new PartitaDTO.SetResponse(6, 4), new PartitaDTO.SetResponse(3, 6),
+                        new PartitaDTO.SetResponse(6, 2)),
+                1, "VINTA", 12);
+        PartitaDTO.StoricoResponse giocata = new PartitaDTO.StoricoResponse(
+                7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
+                "giocata", "PUBBLICA", risultato);
+        PartitaDTO.StoricoResponse creata = new PartitaDTO.StoricoResponse(
+                8, 1, "Campo 1", LocalDate.of(2026, 11, 1), LocalTime.of(18, 0), LocalTime.of(19, 30),
+                "creata", "PRIVATA", null);
+        when(partitaService.getStorico(TEL_1, false)).thenReturn(List.of(giocata, creata));
+
+        mockMvc.perform(get("/api/partite/storico").with(user(principal(TEL_1, false))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].id").value(7))
+                .andExpect(jsonPath("$[0].idCampo").value(1))
+                .andExpect(jsonPath("$[0].nomeCampo").value("Campo 1"))
+                .andExpect(jsonPath("$[0].dataPartita").value("2026-11-05"))
+                .andExpect(jsonPath("$[0].oraInizio").value("18:00:00"))
+                .andExpect(jsonPath("$[0].oraFine").value("19:30:00"))
+                .andExpect(jsonPath("$[0].stato").value("giocata"))
+                .andExpect(jsonPath("$[0].tipo").value("PUBBLICA"))
+                .andExpect(jsonPath("$[0].length()").value(9))
+                .andExpect(jsonPath("$[0].risultato.set.length()").value(3))
+                .andExpect(jsonPath("$[0].risultato.set[0].squadra1").value(6))
+                .andExpect(jsonPath("$[0].risultato.set[0].squadra2").value(4))
+                .andExpect(jsonPath("$[0].risultato.set[2].squadra1").value(6))
+                .andExpect(jsonPath("$[0].risultato.set[2].squadra2").value(2))
+                .andExpect(jsonPath("$[0].risultato.squadraUtente").value(1))
+                .andExpect(jsonPath("$[0].risultato.esito").value("VINTA"))
+                .andExpect(jsonPath("$[0].risultato.puntiAssegnati").value(12))
+                .andExpect(jsonPath("$[0].risultato.length()").value(4))
+                // risultato null va serializzato come null, non omesso
+                .andExpect(jsonPath("$[1].risultato").value(nullValue()))
+                .andExpect(jsonPath("$[1].length()").value(9));
+
+        verify(partitaService, never()).getDettaglio(anyInt(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void getStoricoCampiNullDelRisultatoSerializzatiComeNull() throws Exception {
+        PartitaDTO.RisultatoResponse risultato = new PartitaDTO.RisultatoResponse(
+                List.of(new PartitaDTO.SetResponse(6, 4), new PartitaDTO.SetResponse(6, 3)), null, null, null);
+        when(partitaService.getStorico(TEL_1, false)).thenReturn(List.of(new PartitaDTO.StoricoResponse(
+                7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
+                "giocata", "PUBBLICA", risultato)));
+
+        mockMvc.perform(get("/api/partite/storico").with(user(principal(TEL_1, false))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].risultato.set.length()").value(2))
+                .andExpect(jsonPath("$[0].risultato.length()").value(4))
+                .andExpect(jsonPath("$[0].risultato.squadraUtente").value(nullValue()))
+                .andExpect(jsonPath("$[0].risultato.esito").value(nullValue()))
+                .andExpect(jsonPath("$[0].risultato.puntiAssegnati").value(nullValue()));
+    }
+
+    @Test
+    void getStoricoVuotoPerAdmin() throws Exception {
+        when(partitaService.getStorico(TEL_1, true)).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/partite/storico").with(user(principal(TEL_1, true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void getStoricoSenzaAutenticazioneRifiutato() throws Exception {
+        mockMvc.perform(get("/api/partite/storico")).andExpect(status().isForbidden());
+
+        verify(partitaService, never()).getStorico(anyString(), anyBoolean());
+    }
+
+    // ============================================
     // Ingresso
     // ============================================
 
