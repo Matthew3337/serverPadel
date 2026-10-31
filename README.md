@@ -13,6 +13,10 @@ Backend Spring Boot per l'app di prenotazione campi da padel.
 
 Questa versione sostituisce la tabella `prenotazione` con `partita` e `partecipazione` (più `impostazioni`, `notifica_push`, `avviso`) e non include uno script di migrazione dei dati. **Prima del deploy il database di produzione va ricreato da zero** con [sql/creazione_database.sql](sql/creazione_database.sql): con `ddl-auto=validate` il server non parte su un database con lo schema precedente. Ricreare il database cancella utenti, campi e prenotazioni esistenti.
 
+### Deploy automatico e migrazioni
+
+Ogni push su `main` avvia [.github/workflows/deploy.yml](.github/workflows/deploy.yml), che costruisce l'immagine Docker, la pubblica su ghcr.io e la installa sulla VM di produzione. Prima di riavviare il container il workflow copia `sql/*.sql` sulla VM in `~/padel-sql/` e applica al database `padel_booking` le migrazioni `sql/AAAA-MM-GG_descrizione.sql` non ancora eseguite, in ordine alfabetico. Le migrazioni applicate sono registrate nella tabella `schema_migrazioni`. Se un pull o una migrazione falliscono il deploy si ferma e il container in esecuzione non viene toccato. Le migrazioni non vanno quindi applicate a mano; `sql/creazione_database.sql` non viene mai eseguito dal deploy.
+
 L'utente admin inserito via seed ha come password l'hash placeholder presente nello script SQL: **va sostituito** con un hash BCrypt reale prima di poter fare login. Il modo più semplice è registrare un utente normale tramite `/api/auth/register`, poi aggiornare manualmente `is_admin = 1` per quell'utente via query SQL, invece di usare l'hash placeholder.
 
 ## Endpoint disponibili

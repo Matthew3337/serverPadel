@@ -29,14 +29,64 @@ jobs:
           push: true
           tags: ghcr.io/${{ env.OWNER_LC }}/thepadel-server:latest
 
-      - name: Deploy on VM via SSH
-        uses: appleboy/ssh-action@v1.0.3
+      # Copia gli script SQL sulla VM in ~/padel-sql/ (percorso relativo alla home dell'utente SSH).
+      # rm: true svuota la cartella prima della copia, così non restano file di deploy precedenti.
+      - name: Copy SQL scripts to VM
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.ORACLE_VM_HOST }}
           username: ${{ secrets.ORACLE_VM_USER }}
           key: ${{ secrets.ORACLE_VM_SSH_KEY }}
+          source: "sql/*.sql"
+          target: "padel-sql"
+          strip_components: 1
+          rm: true
+
+      - name: Deploy on VM via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        with:
+          host: ${{ secrets.ORACLE_VM_HOST }}
+          username: ${{ secrets.ORACLE_VM_USER }}
+          key: ${{ secrets.ORACLE_VM_SSH_KEY }}
+          envs: DB_PASSWORD
           script: |
+            # Qualsiasi errore ferma il deploy: senza set -e un pull o una migrazione falliti
+            # passerebbero in silenzio e il container ripartirebbe con l'immagine vecchia.
+            set -e
+
+            # L'immagine è pubblica, ma una credenziale scaduta per ghcr.io salvata sulla VM fa
+            # fallire il pull: si fa login con il token del workflow e logout subito dopo, perché
+            # quel token scade a fine job e lasciarlo salvato ripeterebbe il problema.
+            # Il pull viene prima delle migrazioni: se fallisce, database e container restano com'erano.
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker pull ghcr.io/${{ env.OWNER_LC }}/thepadel-server:latest
+            docker logout ghcr.io
+
+            # La password arriva a mysql tramite MYSQL_PWD: "docker exec -e MYSQL_PWD" senza valore
+            # la copia dall'ambiente, così non compare né nei log né negli argomenti dei processi.
+            export MYSQL_PWD="$DB_PASSWORD"
+            mysql_db() {
+              docker exec -i -e MYSQL_PWD padel-mysql mysql -uroot --batch --skip-column-names padel_booking "$@"
+            }
+
+            # Migrazioni: si applicano prima del riavvio perché con ddl-auto=validate il server
+            # non parte se lo schema non corrisponde. creazione_database.sql non è una migrazione
+            # e il pattern AAAA-MM-GG_*.sql lo esclude.
+            mysql_db -e "CREATE TABLE IF NOT EXISTS schema_migrazioni (nome_file VARCHAR(255) PRIMARY KEY, applicata_il DATETIME NOT NULL)" < /dev/null
+            for file in "$HOME"/padel-sql/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_*.sql; do
+              # Se nessun file corrisponde, il pattern resta letterale: si salta.
+              [ -e "$file" ] || continue
+              nome=$(basename "$file")
+              applicata=$(mysql_db -e "SELECT COUNT(*) FROM schema_migrazioni WHERE nome_file = '$nome'" < /dev/null)
+              if [ "$applicata" = "0" ]; then
+                echo "Applico la migrazione $nome"
+                mysql_db < "$file"
+                mysql_db -e "INSERT INTO schema_migrazioni (nome_file, applicata_il) VALUES ('$nome', NOW())" < /dev/null
+              fi
+            done
+
             docker stop thepadel-server || true
             docker rm thepadel-server || true
             docker network create padel-net || true

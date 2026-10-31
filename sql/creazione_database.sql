@@ -149,3 +149,18 @@ CREATE TABLE avviso (
     CONSTRAINT fk_avviso_partita
         FOREIGN KEY (id_partita) REFERENCES partita (id) ON DELETE CASCADE
 ) ENGINE = InnoDB;
+
+-- Registro delle migrazioni applicate dal deploy (.github/workflows/deploy.yml): il workflow
+-- esegue solo gli script sql/AAAA-MM-GG_*.sql il cui nome non è ancora in questa tabella.
+-- Non è mappata da nessuna Entity e ddl-auto=validate la ignora.
+-- Un database creato da questo script contiene già lo schema finale: quando si aggiunge una
+-- migrazione e si aggiorna questo script, va aggiunto qui anche l'INSERT con il nome del file,
+-- altrimenti il deploy la rieseguirebbe su un database che la contiene già.
+CREATE TABLE schema_migrazioni (
+    nome_file    VARCHAR(255) NOT NULL,
+    applicata_il DATETIME     NOT NULL,
+    PRIMARY KEY (nome_file)
+) ENGINE = InnoDB;
+
+-- Migrazioni già incluse in questo script (oggi nessuna), per esempio:
+-- INSERT INTO schema_migrazioni (nome_file, applicata_il) VALUES ('2026-11-01_descrizione.sql', NOW());
