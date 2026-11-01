@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDate;
@@ -23,10 +24,12 @@ import java.util.List;
 
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -429,6 +432,211 @@ class PartitaControllerTest {
         mockMvc.perform(post("/api/partite/7/esci")).andExpect(status().isForbidden());
 
         verify(partitaService, never()).esci(anyInt(), anyString(), anyBoolean());
+    }
+
+    // ============================================
+    // Utenti invitabili
+    // ============================================
+
+    @Test
+    void getInvitabili200ConFormatoDelContrattoEFiltroPassatoAlService() throws Exception {
+        when(partitaService.getInvitabili(7, "ros", TEL_1, false)).thenReturn(List.of(
+                new PartitaDTO.InvitabileResponse("3330000002", "Luigi", "Rossi", 3.5)));
+
+        mockMvc.perform(get("/api/partite/7/invitabili").param("cerca", "ros").with(user(principal(TEL_1, false))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].telefono").value("3330000002"))
+                .andExpect(jsonPath("$[0].nome").value("Luigi"))
+                .andExpect(jsonPath("$[0].cognome").value("Rossi"))
+                .andExpect(jsonPath("$[0].livello").value(3.5))
+                .andExpect(jsonPath("$[0].length()").value(4));
+
+        verify(partitaService, never()).getDettaglio(anyInt(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void getInvitabiliSenzaCercaPassaNull() throws Exception {
+        when(partitaService.getInvitabili(eq(7), isNull(), eq(TEL_1), eq(false))).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/partite/7/invitabili").with(user(principal(TEL_1, false))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void getInvitabili403ConFormatoErrore() throws Exception {
+        when(partitaService.getInvitabili(7, null, TEL_1, true))
+                .thenThrow(new AccessoNegatoException("Solo il creatore può invitare"));
+
+        mockMvc.perform(get("/api/partite/7/invitabili").with(user(principal(TEL_1, true))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.timestamp").value(notNullValue()))
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.errore").value("Solo il creatore può invitare"))
+                .andExpect(jsonPath("$.length()").value(3));
+    }
+
+    @Test
+    void getInvitabili404ConFormatoErrore() throws Exception {
+        when(partitaService.getInvitabili(7, null, TEL_1, false))
+                .thenThrow(new ResourceNotFoundException("Partita non trovata con id 7"));
+
+        mockMvc.perform(get("/api/partite/7/invitabili").with(user(principal(TEL_1, false))))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.errore").value("Partita non trovata con id 7"));
+    }
+
+    @Test
+    void getInvitabiliSenzaAutenticazioneRifiutato() throws Exception {
+        mockMvc.perform(get("/api/partite/7/invitabili")).andExpect(status().isForbidden());
+
+        verify(partitaService, never()).getInvitabili(anyInt(), any(), anyString(), anyBoolean());
+    }
+
+    // ============================================
+    // Invito
+    // ============================================
+
+    @Test
+    void invita200ConDettaglioAggiornato() throws Exception {
+        PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
+                7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
+                "creata", "PRIVATA", TEL_1,
+                List.of(new PartitaDTO.PostoResponse("UTENTE", TEL_1, "Nome", "Cognome", 1.0, false),
+                        new PartitaDTO.PostoResponse("UTENTE", "3330000002", "Luigi", "Rossi", 3.5, false)),
+                new PartitaDTO.AzioniResponse(true, true, false, false, false));
+        when(partitaService.invita(7, "3330000002", TEL_1, false)).thenReturn(r);
+
+        mockMvc.perform(post("/api/partite/7/inviti").with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"telefono\": \"3330000002\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(7))
+                .andExpect(jsonPath("$.tipo").value("PRIVATA"))
+                .andExpect(jsonPath("$.posti.length()").value(2))
+                .andExpect(jsonPath("$.posti[1].telefono").value("3330000002"))
+                .andExpect(jsonPath("$.azioni.puoInvitare").value(true));
+    }
+
+    @Test
+    void invitaSenzaTelefono400() throws Exception {
+        mockMvc.perform(post("/api/partite/7/inviti").with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.errore").value("telefono: Il telefono è obbligatorio"))
+                .andExpect(jsonPath("$.length()").value(3));
+
+        verify(partitaService, never()).invita(anyInt(), any(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void invitaTelefonoVuoto400() throws Exception {
+        mockMvc.perform(post("/api/partite/7/inviti").with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"telefono\": \"  \"}"))
+                .andExpect(status().isBadRequest());
+
+        verify(partitaService, never()).invita(anyInt(), any(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void invita409ConMessaggioDellaRegola() throws Exception {
+        when(partitaService.invita(7, "3330000002", TEL_1, false))
+                .thenThrow(new BusinessRuleException("Gli inviti sono chiusi: mancano meno di 24 ore all'inizio"));
+
+        mockMvc.perform(post("/api/partite/7/inviti").with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"telefono\": \"3330000002\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.timestamp").value(notNullValue()))
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.errore").value("Gli inviti sono chiusi: mancano meno di 24 ore all'inizio"))
+                .andExpect(jsonPath("$.length()").value(3));
+    }
+
+    @Test
+    void invita404UtenteNonTrovato() throws Exception {
+        when(partitaService.invita(7, "3330000002", TEL_1, false))
+                .thenThrow(new ResourceNotFoundException("Utente non trovato"));
+
+        mockMvc.perform(post("/api/partite/7/inviti").with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"telefono\": \"3330000002\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.errore").value("Utente non trovato"));
+    }
+
+    @Test
+    void invita403PerAdminPassaIsAdminAlService() throws Exception {
+        when(partitaService.invita(7, "3330000002", TEL_1, true))
+                .thenThrow(new AccessoNegatoException("Solo il creatore può invitare"));
+
+        mockMvc.perform(post("/api/partite/7/inviti").with(user(principal(TEL_1, true)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"telefono\": \"3330000002\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.errore").value("Solo il creatore può invitare"));
+    }
+
+    @Test
+    void invitaSenzaAutenticazioneRifiutato() throws Exception {
+        mockMvc.perform(post("/api/partite/7/inviti")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"telefono\": \"3330000002\"}"))
+                .andExpect(status().isForbidden());
+
+        verify(partitaService, never()).invita(anyInt(), any(), anyString(), anyBoolean());
+    }
+
+    // ============================================
+    // Bacheca inviti
+    // ============================================
+
+    @Test
+    void getBachecaInviti200ConFormatoDelContrattoENonPassaDalDettaglio() throws Exception {
+        PartitaDTO.InvitoRicevutoResponse riga = new PartitaDTO.InvitoRicevutoResponse(
+                7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
+                "confermata", "PRIVATA", "Mario", "Rossi");
+        when(partitaService.getBachecaInviti(TEL_1, false)).thenReturn(List.of(riga));
+
+        mockMvc.perform(get("/api/partite/inviti").with(user(principal(TEL_1, false))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(7))
+                .andExpect(jsonPath("$[0].idCampo").value(1))
+                .andExpect(jsonPath("$[0].nomeCampo").value("Campo 1"))
+                .andExpect(jsonPath("$[0].dataPartita").value("2026-11-05"))
+                .andExpect(jsonPath("$[0].oraInizio").value("18:00:00"))
+                .andExpect(jsonPath("$[0].oraFine").value("19:30:00"))
+                .andExpect(jsonPath("$[0].stato").value("confermata"))
+                .andExpect(jsonPath("$[0].tipo").value("PRIVATA"))
+                .andExpect(jsonPath("$[0].nomeCreatore").value("Mario"))
+                .andExpect(jsonPath("$[0].cognomeCreatore").value("Rossi"))
+                .andExpect(jsonPath("$[0].length()").value(10));
+
+        verify(partitaService, never()).getDettaglio(anyInt(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void getBachecaInvitiVuotaPerAdmin() throws Exception {
+        when(partitaService.getBachecaInviti(TEL_1, true)).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/partite/inviti").with(user(principal(TEL_1, true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void getBachecaInvitiSenzaAutenticazioneRifiutata() throws Exception {
+        mockMvc.perform(get("/api/partite/inviti")).andExpect(status().isForbidden());
+
+        verify(partitaService, never()).getBachecaInviti(anyString(), anyBoolean());
     }
 
     private static UtentePrincipal principal(String telefono, boolean admin) {

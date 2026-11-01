@@ -1,5 +1,7 @@
 package com.padelbooking.api.dto;
 
+import jakarta.validation.constraints.NotBlank;
+
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
@@ -229,5 +231,79 @@ public class PartitaDTO {
         public void setSquadra1(Integer value) { this.squadra1 = value; }
         public Integer getSquadra2() { return squadra2; }
         public void setSquadra2(Integer value) { this.squadra2 = value; }
+    }
+
+    // Body di POST /api/partite/{id}/inviti: l'utente da aggiungere alla partita
+    public static class InvitoRequest {
+        @NotBlank(message = "Il telefono è obbligatorio")
+        private String telefono;
+        public InvitoRequest() { }
+        public InvitoRequest(String telefono) { this.telefono = telefono; }
+        public String getTelefono() { return telefono; }
+        public void setTelefono(String value) { this.telefono = value; }
+    }
+
+    // Un utente che il creatore può invitare (UI_GI_2_SelezioneInvitati)
+    public static class InvitabileResponse {
+        private String telefono;
+        private String nome;
+        private String cognome;
+        private Double livello;
+        public InvitabileResponse() { }
+        public InvitabileResponse(String telefono, String nome, String cognome, Double livello) {
+            this.telefono = telefono; this.nome = nome; this.cognome = cognome; this.livello = livello;
+        }
+        public String getTelefono() { return telefono; }
+        public void setTelefono(String value) { this.telefono = value; }
+        public String getNome() { return nome; }
+        public void setNome(String value) { this.nome = value; }
+        public String getCognome() { return cognome; }
+        public void setCognome(String value) { this.cognome = value; }
+        public Double getLivello() { return livello; }
+        public void setLivello(Double value) { this.livello = value; }
+    }
+
+    // Una riga della bacheca inviti (UC_GI_2): lo slot, lo stato e chi ha invitato l'utente
+    public static class InvitoRicevutoResponse {
+        private Integer id;
+        private Integer idCampo;
+        private String nomeCampo;
+        private LocalDate dataPartita;
+        private LocalTime oraInizio;
+        private LocalTime oraFine;
+        // In minuscolo come in DettaglioResponse: creata o confermata
+        private String stato;
+        // PUBBLICA o PRIVATA
+        private String tipo;
+        private String nomeCreatore;
+        private String cognomeCreatore;
+        public InvitoRicevutoResponse() { }
+        public InvitoRicevutoResponse(Integer id, Integer idCampo, String nomeCampo, LocalDate dataPartita,
+                                      LocalTime oraInizio, LocalTime oraFine, String stato, String tipo,
+                                      String nomeCreatore, String cognomeCreatore) {
+            this.id = id; this.idCampo = idCampo; this.nomeCampo = nomeCampo; this.dataPartita = dataPartita;
+            this.oraInizio = oraInizio; this.oraFine = oraFine; this.stato = stato; this.tipo = tipo;
+            this.nomeCreatore = nomeCreatore; this.cognomeCreatore = cognomeCreatore;
+        }
+        public Integer getId() { return id; }
+        public void setId(Integer value) { this.id = value; }
+        public Integer getIdCampo() { return idCampo; }
+        public void setIdCampo(Integer value) { this.idCampo = value; }
+        public String getNomeCampo() { return nomeCampo; }
+        public void setNomeCampo(String value) { this.nomeCampo = value; }
+        public LocalDate getDataPartita() { return dataPartita; }
+        public void setDataPartita(LocalDate value) { this.dataPartita = value; }
+        public LocalTime getOraInizio() { return oraInizio; }
+        public void setOraInizio(LocalTime value) { this.oraInizio = value; }
+        public LocalTime getOraFine() { return oraFine; }
+        public void setOraFine(LocalTime value) { this.oraFine = value; }
+        public String getStato() { return stato; }
+        public void setStato(String value) { this.stato = value; }
+        public String getTipo() { return tipo; }
+        public void setTipo(String value) { this.tipo = value; }
+        public String getNomeCreatore() { return nomeCreatore; }
+        public void setNomeCreatore(String value) { this.nomeCreatore = value; }
+        public String getCognomeCreatore() { return cognomeCreatore; }
+        public void setCognomeCreatore(String value) { this.cognomeCreatore = value; }
     }
 }

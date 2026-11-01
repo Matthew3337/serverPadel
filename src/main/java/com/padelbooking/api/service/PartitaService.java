@@ -57,6 +57,20 @@ public class PartitaService {
     private static final String MESSAGGIO_USCITA_CHIUSA =
             "L'uscita è chiusa: mancano meno di " + RegoleTempoPartita.getLimiteModificheOre() + " ore all'inizio";
 
+    // Messaggi degli inviti (RNF_U_3): fanno parte del contratto con il client
+    private static final String MESSAGGIO_SOLO_CREATORE_INVITA = "Solo il creatore può invitare";
+    private static final String MESSAGGIO_INVITI_CHIUSI =
+            "Gli inviti sono chiusi: mancano meno di " + RegoleTempoPartita.getLimiteModificheOre() + " ore all'inizio";
+    private static final String MESSAGGIO_INVITATO_PARTECIPA_GIA = "L'utente partecipa già a questa partita";
+    private static final String MESSAGGIO_NON_INVITA_ADMIN = "Non è possibile invitare un amministratore";
+    private static final String MESSAGGIO_UTENTE_NON_TROVATO = "Utente non trovato";
+
+    // Carattere di escape per i LIKE della ricerca degli invitabili (vedi UtenteRepository.findInvitabili)
+    private static final char ESCAPE_LIKE = '!';
+
+    // RF_GI_6: la bacheca inviti mostra le partite ancora da giocare, non annullate né giocate
+    private static final List<StatoPartita> STATI_BACHECA_INVITI = List.of(StatoPartita.CREATA, StatoPartita.CONFERMATA);
+
     // Esito della partita per l'utente nello storico: fanno parte del contratto con il client
     private static final String ESITO_VINTA = "VINTA";
     private static final String ESITO_PERSA = "PERSA";
@@ -274,6 +288,104 @@ public class PartitaService {
     }
 
     // ============================================
+    // Utenti invitabili
+    // ============================================
+    // UC_GI_1 passo 2: il creatore cerca chi invitare tra gli utenti non admin che non hanno già un posto,
+    // di qualunque livello (RF_GI_2). L'admin non è mai il creatore di una partita da giocare, quindi
+    // riceve subito 403 come in entra, senza leggere la partita.
+    @Transactional(readOnly = true)
+    public List<PartitaDTO.InvitabileResponse> getInvitabili(Integer idPartita, String cerca,
+                                                             String telefonoRichiedente, boolean isAdmin) {
+        if (isAdmin) {
+            throw new AccessoNegatoException(MESSAGGIO_SOLO_CREATORE_INVITA);
+        }
+        Partita partita = partitaRepository.findById(idPartita)
+                .orElseThrow(() -> partitaNonTrovata(idPartita));
+        Partecipazione partecipazione = verificaVisibileOLancia(partita, telefonoRichiedente);
+        if (!eCreatore(partita, partecipazione)) {
+            throw new AccessoNegatoException(MESSAGGIO_SOLO_CREATORE_INVITA);
+        }
+
+        return utenteRepository.findInvitabili(idPartita, patternRicerca(cerca)).stream()
+                .map(u -> new PartitaDTO.InvitabileResponse(u.getTelefono(), u.getNome(), u.getCognome(),
+                        u.getLivello()))
+                .toList();
+    }
+
+    // ============================================
+    // Invito di un utente
+    // ============================================
+    // UC_GI_1, RF_GI_1–5, RF_GP_10: il creatore aggiunge subito l'invitato alla partita, pubblica
+    // o privata, senza che l'invitato debba accettare. Valgono le stesse regole di puoInvitare.
+    @Transactional
+    public PartitaDTO.DettaglioResponse invita(Integer idPartita, String telefonoInvitato,
+                                               String telefonoRichiedente, boolean isAdmin) {
+        if (isAdmin) {
+            throw new AccessoNegatoException(MESSAGGIO_SOLO_CREATORE_INVITA);
+        }
+
+        // Lock come prima lettura, come in entra: inviti e ingressi sulla stessa partita si serializzano,
+        // quindi il conteggio dei posti vede sempre le partecipazioni aggiunte dalle richieste concorrenti
+        Partita partita = partitaRepository.findByIdPerAggiornamento(idPartita)
+                .orElseThrow(() -> partitaNonTrovata(idPartita));
+        Partecipazione partecipazione = verificaVisibileOLancia(partita, telefonoRichiedente);
+
+        LocalDateTime adesso = LocalDateTime.now(clock);
+        Optional<RuntimeException> rifiuto = rifiutoInvito(partita, partecipazione, adesso);
+        if (rifiuto.isPresent()) {
+            throw rifiuto.get();
+        }
+
+        Utente invitato = utenteRepository.findById(telefonoInvitato)
+                .orElseThrow(() -> new ResourceNotFoundException(MESSAGGIO_UTENTE_NON_TROVATO));
+        if (Boolean.TRUE.equals(invitato.getIsAdmin())) {
+            throw new BusinessRuleException(MESSAGGIO_NON_INVITA_ADMIN);
+        }
+        // Copre anche l'invito a se stesso: il creatore ha già un posto
+        if (trovaPartecipazioneUtente(partita, telefonoInvitato).isPresent()) {
+            throw new BusinessRuleException(MESSAGGIO_INVITATO_PARTECIPA_GIA);
+        }
+
+        // Invitato e non ancora confermato: la conferma arriva tra -24 h e -12 h, come per chi entra da solo
+        Partecipazione nuova = new Partecipazione(TipoPartecipazione.UTENTE, invitato, true, false);
+        partita.aggiungiPartecipazione(nuova);
+        try {
+            // Come in entra: la partita è gestita dall'EntityManager e il cascade inserisce la partecipazione
+            partitaRepository.flush();
+        } catch (DataIntegrityViolationException ex) {
+            // Rete di sicurezza oltre al lock: il vincolo unico sul DB impedisce il doppio posto
+            if (violaVincolo(ex, VINCOLO_PARTECIPAZIONE_UNICA)) {
+                throw new BusinessRuleException(MESSAGGIO_INVITATO_PARTECIPA_GIA);
+            }
+            throw ex;
+        }
+
+        // T13: notifica di invito (RF_GN_1)
+
+        return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso));
+    }
+
+    // ============================================
+    // Bacheca inviti
+    // ============================================
+    // UC_GI_2, RF_GI_6: le partite creata o confermata in cui l'utente è stato invitato, dalla più vicina.
+    // L'admin non gioca, quindi la sua bacheca è vuota.
+    @Transactional(readOnly = true)
+    public List<PartitaDTO.InvitoRicevutoResponse> getBachecaInviti(String telefonoRichiedente, boolean isAdmin) {
+        if (isAdmin) {
+            return List.of();
+        }
+        return partecipazioneRepository.findInvitiByTelefono(telefonoRichiedente, TipoPartecipazione.UTENTE,
+                        STATI_BACHECA_INVITI).stream()
+                .map(Partecipazione::getPartita)
+                // Ordine sull'inizio effettivo come nella bacheca pubbliche; a parità di inizio decide l'id
+                .sorted(Comparator.comparing((Partita p) -> RegoleTempoPartita.inizioEffettivo(p))
+                        .thenComparing(Partita::getId))
+                .map(this::toInvitoRicevutoResponse)
+                .toList();
+    }
+
+    // ============================================
     // Helper privati
     // ============================================
 
@@ -324,6 +436,41 @@ public class PartitaService {
         return Optional.empty();
     }
 
+    // Come rifiutoEliminazione, per gli inviti: condivisa da invita e da puoInvitare. Le regole che
+    // dipendono dall'invitato (esistenza, admin, già partecipante) stanno in invita, perché il bottone
+    // del dettaglio non riguarda un invitato in particolare.
+    private Optional<RuntimeException> rifiutoInvito(Partita partita, Partecipazione partecipazione,
+                                                     LocalDateTime adesso) {
+        if (!eCreatore(partita, partecipazione)) {
+            return Optional.of(new AccessoNegatoException(MESSAGGIO_SOLO_CREATORE_INVITA));
+        }
+        if (partita.getStato() != StatoPartita.CREATA) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_NON_PIU_APERTA));
+        }
+        if (!RegoleTempoPartita.primaDelLimiteModifiche(partita, adesso)) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_INVITI_CHIUSI));
+        }
+        if (partita.getPartecipazioni().size() >= POSTI_MAX) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_AL_COMPLETO));
+        }
+        return Optional.empty();
+    }
+
+    // Pattern per findInvitabili: "contiene", senza distinzione tra maiuscole e minuscole.
+    // Senza testo di ricerca diventa "%%", che corrisponde a tutti (nome e cognome non sono mai null).
+    // %, _ e il carattere di escape scritti dall'utente vanno cercati come caratteri normali.
+    private String patternRicerca(String cerca) {
+        String testo = cerca == null ? "" : cerca.trim().toLowerCase(Locale.ROOT);
+        StringBuilder pattern = new StringBuilder("%");
+        for (char c : testo.toCharArray()) {
+            if (c == '%' || c == '_' || c == ESCAPE_LIKE) {
+                pattern.append(ESCAPE_LIKE);
+            }
+            pattern.append(c);
+        }
+        return pattern.append('%').toString();
+    }
+
     // Creatore = il richiedente occupa il posto UTENTE del creatore
     private boolean eCreatore(Partita partita, Partecipazione partecipazione) {
         return partecipazione != null
@@ -358,13 +505,10 @@ public class PartitaService {
     // dallo stato e dall'istante attuale rispetto all'inizio e alla fine effettivi
     private PartitaDTO.AzioniResponse calcolaAzioni(Partita partita, Partecipazione partecipazione, LocalDateTime adesso) {
         boolean partecipante = partecipazione != null;
-        boolean creatore = eCreatore(partita, partecipazione);
         boolean creata = partita.getStato() == StatoPartita.CREATA;
         boolean confermata = partita.getStato() == StatoPartita.CONFERMATA;
-        boolean primaDelLimite = RegoleTempoPartita.primaDelLimiteModifiche(partita, adesso);
 
-        boolean puoInvitare = creatore && creata && primaDelLimite
-                && partita.getPartecipazioni().size() < POSTI_MAX;
+        boolean puoInvitare = rifiutoInvito(partita, partecipazione, adesso).isEmpty();
         boolean puoEliminare = rifiutoEliminazione(partita, partecipazione, adesso).isEmpty();
         boolean puoUscire = rifiutoUscita(partita, partecipazione, adesso).isEmpty();
         boolean puoConfermare = partecipante && !Boolean.TRUE.equals(partecipazione.getConfermata())
@@ -458,6 +602,22 @@ public class PartitaService {
             esito = squadraUtente.equals(vincitrice) ? ESITO_VINTA : ESITO_PERSA;
         }
         return new PartitaDTO.RisultatoResponse(set, squadraUtente, esito, pa.getPuntiAssegnati());
+    }
+
+    private PartitaDTO.InvitoRicevutoResponse toInvitoRicevutoResponse(Partita p) {
+        Utente creatore = p.getCreatore();
+        return new PartitaDTO.InvitoRicevutoResponse(
+                p.getId(),
+                p.getCampo().getId(),
+                p.getCampo().getNome(),
+                p.getDataPartita(),
+                p.getOraInizio(),
+                p.getOraFine(),
+                p.getStato().name().toLowerCase(Locale.ROOT),
+                p.getTipo().name(),
+                creatore.getNome(),
+                creatore.getCognome()
+        );
     }
 
     private PartitaDTO.BachecaResponse toBachecaResponse(Partita p) {
