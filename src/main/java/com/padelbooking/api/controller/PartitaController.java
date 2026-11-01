@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-// Operazioni sulla singola partita: dettaglio, bacheche, storico, inviti e azioni dei partecipanti
+// Operazioni sulla singola partita: dettaglio, bacheche, storico, inviti e azioni dei partecipanti (ingresso, uscita, conferma)
 @RestController
 @RequestMapping("/api/partite")
 public class PartitaController {
@@ -87,6 +87,15 @@ public class PartitaController {
         boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
         partitaService.esci(id, principal.getTelefono(), isAdmin);
         return ResponseEntity.noContent().build();
+    }
+
+    // Conferma della propria partecipazione, senza body: restituisce il dettaglio già aggiornato
+    // POST /api/partite/7/conferma
+    @PostMapping("/{id}/conferma")
+    public ResponseEntity<PartitaDTO.DettaglioResponse> conferma(@PathVariable Integer id,
+                                                                 @AuthenticationPrincipal UtentePrincipal principal) {
+        boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
+        return ResponseEntity.ok(partitaService.conferma(id, principal.getTelefono(), isAdmin));
     }
 
     // Utenti che il creatore può invitare, filtrati facoltativamente per nome o cognome

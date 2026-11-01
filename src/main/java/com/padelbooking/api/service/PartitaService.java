@@ -30,8 +30,8 @@ public class PartitaService {
     // RF_GP_9: una partita pubblica è visibile a chi ha un livello che differisce al massimo di 1 da quello del creatore
     private static final double DIFFERENZA_LIVELLO_MAX = 1.0;
 
-    // Una partita ha al massimo 4 posti (UTENTE o CAMPO)
-    private static final int POSTI_MAX = 4;
+    // Una partita ha al massimo 4 posti (UTENTE o CAMPO): la soglia sta in RegoleConfermaPartita
+    private static final int POSTI_MAX = RegoleConfermaPartita.getPostiMax();
 
     // Vincolo unico (id_partita, telefono_utente) su partecipazione: un utente occupa al massimo un posto per partita
     private static final String VINCOLO_PARTECIPAZIONE_UNICA = "uk_partecipazione_utente";
@@ -64,6 +64,12 @@ public class PartitaService {
     private static final String MESSAGGIO_INVITATO_PARTECIPA_GIA = "L'utente partecipa già a questa partita";
     private static final String MESSAGGIO_NON_INVITA_ADMIN = "Non è possibile invitare un amministratore";
     private static final String MESSAGGIO_UTENTE_NON_TROVATO = "Utente non trovato";
+
+    // Messaggi della conferma (RNF_U_3): fanno parte del contratto con il client
+    private static final String MESSAGGIO_ADMIN_NON_CONFERMA = "L'amministratore non conferma le partite";
+    private static final String MESSAGGIO_GIA_CONFERMATO = "Hai già confermato la partecipazione";
+    private static final String MESSAGGIO_CONFERMA_FUORI_FINESTRA =
+            "La conferma è possibile solo tra 24 e 12 ore prima dell'inizio";
 
     // Carattere di escape per i LIKE della ricerca degli invitabili (vedi UtenteRepository.findInvitabili)
     private static final char ESCAPE_LIKE = '!';
@@ -366,6 +372,39 @@ public class PartitaService {
     }
 
     // ============================================
+    // Conferma della partecipazione
+    // ============================================
+    // UC_GC_1, RF_GC_3–6: un partecipante UTENTE conferma la propria presenza tra 24 e 12 ore prima
+    // dell'inizio. Se dopo la sua conferma la partita ha 4 posti e tutti gli utenti hanno confermato,
+    // passa a CONFERMATA. Valgono le stesse regole di puoConfermare.
+    @Transactional
+    public PartitaDTO.DettaglioResponse conferma(Integer idPartita, String telefonoRichiedente, boolean isAdmin) {
+        if (isAdmin) {
+            throw new AccessoNegatoException(MESSAGGIO_ADMIN_NON_CONFERMA);
+        }
+
+        // Lock come prima lettura, come in entra: conferma, uscita e attività pianificata sulla stessa
+        // partita si serializzano, quindi il passaggio a CONFERMATA vede i posti e le conferme aggiornati
+        Partita partita = partitaRepository.findByIdPerAggiornamento(idPartita)
+                .orElseThrow(() -> partitaNonTrovata(idPartita));
+        Partecipazione partecipazione = verificaVisibileOLancia(partita, telefonoRichiedente);
+
+        LocalDateTime adesso = LocalDateTime.now(clock);
+        Optional<RuntimeException> rifiuto = rifiutoConferma(partita, partecipazione, adesso);
+        if (rifiuto.isPresent()) {
+            throw rifiuto.get();
+        }
+
+        // Partita e partecipazione sono gestite dall'EntityManager: le modifiche le scrive il dirty checking al commit
+        partecipazione.setConfermata(true);
+        if (RegoleConfermaPartita.confermaSeCompleta(partita)) {
+            // T13: notifica ADMIN_CONFERMA all'amministratore (RF_GN_8)
+        }
+
+        return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso));
+    }
+
+    // ============================================
     // Bacheca inviti
     // ============================================
     // UC_GI_2, RF_GI_6: le partite creata o confermata in cui l'utente è stato invitato, dalla più vicina.
@@ -456,6 +495,27 @@ public class PartitaService {
         return Optional.empty();
     }
 
+    // Come rifiutoEliminazione, per la conferma: condivisa da conferma e da puoConfermare.
+    // RF_GC_5: partecipazione è sempre un posto UTENTE (trovaPartecipazioneUtente), quindi i posti
+    // CAMPO non confermano mai. Una partita già CONFERMATA ha tutti gli utenti confermati e dà
+    // "Hai già confermato" prima del controllo sullo stato.
+    private Optional<RuntimeException> rifiutoConferma(Partita partita, Partecipazione partecipazione,
+                                                       LocalDateTime adesso) {
+        if (partecipazione == null) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_NON_PARTECIPI));
+        }
+        if (Boolean.TRUE.equals(partecipazione.getConfermata())) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_GIA_CONFERMATO));
+        }
+        if (partita.getStato() != StatoPartita.CREATA) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_NON_PIU_APERTA));
+        }
+        if (!RegoleTempoPartita.inFinestraConferma(partita, adesso)) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_CONFERMA_FUORI_FINESTRA));
+        }
+        return Optional.empty();
+    }
+
     // Pattern per findInvitabili: "contiene", senza distinzione tra maiuscole e minuscole.
     // Senza testo di ricerca diventa "%%", che corrisponde a tutti (nome e cognome non sono mai null).
     // %, _ e il carattere di escape scritti dall'utente vanno cercati come caratteri normali.
@@ -505,14 +565,12 @@ public class PartitaService {
     // dallo stato e dall'istante attuale rispetto all'inizio e alla fine effettivi
     private PartitaDTO.AzioniResponse calcolaAzioni(Partita partita, Partecipazione partecipazione, LocalDateTime adesso) {
         boolean partecipante = partecipazione != null;
-        boolean creata = partita.getStato() == StatoPartita.CREATA;
         boolean confermata = partita.getStato() == StatoPartita.CONFERMATA;
 
         boolean puoInvitare = rifiutoInvito(partita, partecipazione, adesso).isEmpty();
         boolean puoEliminare = rifiutoEliminazione(partita, partecipazione, adesso).isEmpty();
         boolean puoUscire = rifiutoUscita(partita, partecipazione, adesso).isEmpty();
-        boolean puoConfermare = partecipante && !Boolean.TRUE.equals(partecipazione.getConfermata())
-                && creata && RegoleTempoPartita.inFinestraConferma(partita, adesso);
+        boolean puoConfermare = rifiutoConferma(partita, partecipazione, adesso).isEmpty();
         boolean puoRegistrareRisultato = partecipante && confermata
                 && RegoleTempoPartita.inFinestraRisultato(partita, adesso);
 

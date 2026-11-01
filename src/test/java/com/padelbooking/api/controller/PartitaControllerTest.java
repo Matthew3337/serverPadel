@@ -435,6 +435,71 @@ class PartitaControllerTest {
     }
 
     // ============================================
+    // Conferma
+    // ============================================
+
+    @Test
+    void conferma200ConDettaglioAggiornato() throws Exception {
+        PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
+                7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
+                "confermata", "PRIVATA", TEL_1,
+                List.of(new PartitaDTO.PostoResponse("UTENTE", TEL_1, "Mario", "Rossi", 2.5, true),
+                        new PartitaDTO.PostoResponse("CAMPO", null, null, null, null, false)),
+                new PartitaDTO.AzioniResponse(false, false, false, false, false));
+        when(partitaService.conferma(7, TEL_1, false)).thenReturn(r);
+
+        mockMvc.perform(post("/api/partite/7/conferma").with(user(principal(TEL_1, false))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(7))
+                .andExpect(jsonPath("$.stato").value("confermata"))
+                .andExpect(jsonPath("$.posti[0].confermata").value(true))
+                .andExpect(jsonPath("$.posti[1].confermata").value(false))
+                .andExpect(jsonPath("$.azioni.puoConfermare").value(false));
+    }
+
+    @Test
+    void conferma409ConFormatoErrore() throws Exception {
+        String messaggio = "La conferma è possibile solo tra 24 e 12 ore prima dell'inizio";
+        when(partitaService.conferma(7, TEL_1, false)).thenThrow(new BusinessRuleException(messaggio));
+
+        mockMvc.perform(post("/api/partite/7/conferma").with(user(principal(TEL_1, false))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.timestamp").value(notNullValue()))
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.errore").value(messaggio))
+                .andExpect(jsonPath("$.length()").value(3));
+    }
+
+    @Test
+    void conferma403PerAdminPassaIsAdminAlService() throws Exception {
+        when(partitaService.conferma(7, TEL_1, true))
+                .thenThrow(new AccessoNegatoException("L'amministratore non conferma le partite"));
+
+        mockMvc.perform(post("/api/partite/7/conferma").with(user(principal(TEL_1, true))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.errore").value("L'amministratore non conferma le partite"));
+    }
+
+    @Test
+    void conferma404ConFormatoErrore() throws Exception {
+        when(partitaService.conferma(7, TEL_1, false))
+                .thenThrow(new ResourceNotFoundException("Partita non trovata con id 7"));
+
+        mockMvc.perform(post("/api/partite/7/conferma").with(user(principal(TEL_1, false))))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.errore").value("Partita non trovata con id 7"));
+    }
+
+    @Test
+    void confermaSenzaAutenticazioneRifiutata() throws Exception {
+        mockMvc.perform(post("/api/partite/7/conferma")).andExpect(status().isForbidden());
+
+        verify(partitaService, never()).conferma(anyInt(), anyString(), anyBoolean());
+    }
+
+    // ============================================
     // Utenti invitabili
     // ============================================
 

@@ -45,7 +45,7 @@ Nella risposta delle prenotazioni `id` è l'id della partita, `telefonoGiocatore
 - `GET /api/partite/{id}` — dettaglio della partita: `id`, `idCampo`, `nomeCampo`, `dataPartita`, `oraInizio`, `oraFine`, `stato` (minuscolo), `tipo` (`PUBBLICA`/`PRIVATA`), `telefonoCreatore`, `posti` e `azioni`. Risposta 200.
   - Visibilità: partecipanti e admin la vedono sempre (anche annullata); una partita `PUBBLICA` non annullata è visibile anche a chi ha un livello che differisce al massimo di 1 da quello del creatore. Negli altri casi 404 con lo stesso messaggio della partita inesistente (`Partita non trovata con id {id}`).
   - `posti`: solo i posti occupati, il creatore per primo; ogni posto ha `tipo` (`UTENTE`/`CAMPO`), `telefono`, `nome`, `cognome`, `livello` (null per i posti `CAMPO`) e `confermata`.
-  - `azioni` (calcolate per l'utente del token e per l'istante attuale, sull'inizio effettivo della partita anche dopo mezzanotte): `puoInvitare` (creatore, stato creata, più di 24h all'inizio, meno di 4 posti occupati), `puoEliminare` (creatore, stato creata, più di 24h all'inizio), `puoUscire` (altro partecipante, stato creata, più di 24h all'inizio), `puoConfermare` (partecipante non ancora confermato, stato creata, tra 24h e 12h dall'inizio), `puoRegistrareRisultato` (partecipante, stato confermata, dalla fine fino a 24h dopo). Per l'admin sono tutte false.
+  - `azioni` (calcolate per l'utente del token e per l'istante attuale, sull'inizio effettivo della partita anche dopo mezzanotte): `puoInvitare` (creatore, stato creata, più di 24h all'inizio, meno di 4 posti occupati), `puoEliminare` (creatore, stato creata, più di 24h all'inizio), `puoUscire` (altro partecipante, stato creata, più di 24h all'inizio), `puoConfermare` (partecipante non ancora confermato, stato creata, tra 24h e 12h dall'inizio: stesse regole di `POST /api/partite/{id}/conferma`), `puoRegistrareRisultato` (partecipante, stato confermata, dalla fine fino a 24h dopo). Per l'admin sono tutte false.
 - `GET /api/partite/pubbliche` — bacheca delle partite in cui l'utente può entrare: tipo `PUBBLICA`, stato `creata`, meno di 4 posti occupati, più di 24h all'inizio effettivo, livello del creatore che differisce al massimo di 1 da quello dell'utente, utente non già partecipante. Ordinate per inizio effettivo crescente. Risposta 200: `[ { id, idCampo, nomeCampo, dataPartita, oraInizio, oraFine, nomeCreatore, cognomeCreatore, livelloCreatore, postiLiberi } ]`, `[]` se non ce ne sono. Per l'admin sempre `[]`.
 - `GET /api/partite/storico` — storico dell'utente: le partite in cui ha un posto come giocatore (`UTENTE`), future e passate, escluse le `annullata`. Ordinate per inizio effettivo decrescente (dalla più recente; a parità di inizio, id decrescente). Per l'admin sempre `[]`. Risposta 200: `[ { id, idCampo, nomeCampo, dataPartita, oraInizio, oraFine, stato, tipo, risultato } ]`, `[]` se non ce ne sono. Nessun errore specifico (403 senza token).
   - `risultato` è `null` finché non ci sono almeno i primi due set; altrimenti `{ set: [ { squadra1, squadra2 } ], squadraUtente, esito, puntiAssegnati }`.
@@ -81,6 +81,25 @@ Nella risposta delle prenotazioni `id` è l'id della partita, `telefonoGiocatore
 
   Le regole sulla partita (creatore, stato, 24h, posti) sono quelle di `puoInvitare` (stesso codice nel service) e si controllano in quest'ordine, prima di quelle sull'invitato. La partita è letta con lo stesso lock in scrittura di `entra`, con il vincolo `uk_partecipazione_utente` come rete di sicurezza.
 - `GET /api/partite/inviti` — bacheca inviti: le partite `creata` o `confermata` in cui l'utente ha un posto da invitato (`invitato=true`), ordinate per inizio effettivo crescente (a parità, id crescente). Per l'admin sempre `[]`. Risposta 200: `[ { id, idCampo, nomeCampo, dataPartita, oraInizio, oraFine, stato, tipo, nomeCreatore, cognomeCreatore } ]` (`stato` in minuscolo), `[]` se non ce ne sono. Partecipazione, partita, campo e creatore si leggono con una sola query (`JOIN FETCH`).
+
+- `POST /api/partite/{id}/conferma` — senza body: un partecipante `UTENTE` conferma la propria partecipazione (`confermata=true`) tra 24 e 12 ore prima dell'inizio effettivo (finestra `[inizio−24h, inizio−12h)`: a esattamente 24h è aperta, a esattamente 12h è chiusa). Se dopo la conferma la partita ha 4 posti occupati e tutti i partecipanti `UTENTE` hanno confermato (i posti `CAMPO` non confermano), passa a `confermata`. Risposta 200 con il dettaglio di `GET /api/partite/{id}` aggiornato. Errori:
+  - 404 `Partita non trovata con id {id}` se la partita non esiste o l'utente non la vede;
+  - 403 `L'amministratore non conferma le partite`;
+  - 409, in quest'ordine: `Non partecipi a questa partita`, `Hai già confermato la partecipazione`, `La partita non è più aperta` (stato diverso da `creata`), `La conferma è possibile solo tra 24 e 12 ore prima dell'inizio`.
+
+  Le condizioni sono quelle di `puoConfermare` del dettaglio (stesso codice nel service). La partita è letta con lo stesso lock in scrittura di `entra`.
+
+## Attività pianificata delle scadenze
+
+Ogni 60 secondi, e subito all'avvio, `ScadenzePartiteScheduler` esegue un giro di `ScadenzePartiteService`. Le condizioni sono "scadenza ≤ adesso" sull'inizio effettivo (anche dopo mezzanotte), non sul minuto esatto: dopo un fermo del server il primo giro applica le scadenze maturate nel frattempo, e ripetere un giro non cambia nulla.
+
+- **−24h**: una partita `creata` con `inizio − 24h ≤ adesso < inizio` e meno di 4 posti occupati resta `creata` e riceve, una sola volta, un `avviso` `PARTITA_INCOMPLETA` (vincolo `uk_avviso`).
+- **−12h**: nessuna modifica; la finestra di conferma si chiude e la partita resta `creata` se manca qualche conferma.
+- **Inizio**: con `inizio ≤ adesso`, una partita `creata`, oppure `confermata` con meno di 4 posti, passa ad `annullata`.
+
+Il giro legge solo le partite `creata` e le `confermata` con meno di 4 posti con `data_partita` fino a dopodomani; ognuna si elabora in una transazione propria con il lock in scrittura, e un errore su una partita viene loggato senza fermare le altre. Ogni modifica produce un log INFO `Scadenze: partita {id}, passo {-24h|INIZIO}, esito {AVVISO_CREATO|ANNULLATA} (...)`; i giri senza modifiche si vedono con `logging.level.com.padelbooking.api.service.ScadenzePartiteService=DEBUG`.
+
+Lo scheduler si disattiva con la proprietà `padel.scadenze.attive=false` (variabile d'ambiente `PADEL_SCADENZE_ATTIVE`, default `true`).
 
 ## Esempio di body per creare una prenotazione
 
