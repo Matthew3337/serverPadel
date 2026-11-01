@@ -70,6 +70,17 @@ Nella risposta delle prenotazioni `id` è l'id della partita, `telefonoGiocatore
   - 409 `Non partecipi a questa partita`, `Il creatore non può uscire dalla partita: può eliminarla`, `La partita non è più aperta` (stato diverso da `creata`), `L'uscita è chiusa: mancano meno di 24 ore all'inizio`.
 
   Le condizioni sono le stesse di `puoEliminare` e `puoUscire` del dettaglio (stesso codice nel service), con il limite stretto: a esattamente 24h dall'inizio effettivo l'operazione è già chiusa. Entrambe leggono la partita con lo stesso lock in scrittura di `entra`.
+- `GET /api/partite/{id}/invitabili?cerca=<testo>` — riservato al creatore: utenti che può invitare, cioè non admin, senza un posto nella partita (escluso quindi il creatore), di qualunque livello. `cerca` è facoltativo: filtra su nome o cognome (contiene, senza distinzione tra maiuscole e minuscole; spazi ai lati ignorati; `%` e `_` cercati come caratteri normali). Ordinati per cognome, nome e telefono. Risposta 200: `[ { telefono, nome, cognome, livello } ]`, `[]` se non ce ne sono. Errori:
+  - 404 `Partita non trovata con id {id}` se la partita non esiste o l'utente non la vede;
+  - 403 `Solo il creatore può invitare` (anche per l'admin, senza leggere la partita).
+- `POST /api/partite/{id}/inviti` — body `{ "telefono": "3330000002" }`: il creatore aggiunge subito l'utente alla partita, pubblica o privata, come giocatore invitato (`invitato=true`, `confermata=false`), senza accettazione dell'invitato. Risposta 200 con il dettaglio di `GET /api/partite/{id}` aggiornato (visto dal creatore). Errori:
+  - 400 `telefono: Il telefono è obbligatorio` (mancante o vuoto);
+  - 404 `Partita non trovata con id {id}` (inesistente o non visibile), `Utente non trovato`;
+  - 403 `Solo il creatore può invitare` (anche per l'admin);
+  - 409 `La partita non è più aperta` (stato diverso da `creata`), `Gli inviti sono chiusi: mancano meno di 24 ore all'inizio`, `La partita è al completo`, `Non è possibile invitare un amministratore`, `L'utente partecipa già a questa partita`.
+
+  Le regole sulla partita (creatore, stato, 24h, posti) sono quelle di `puoInvitare` (stesso codice nel service) e si controllano in quest'ordine, prima di quelle sull'invitato. La partita è letta con lo stesso lock in scrittura di `entra`, con il vincolo `uk_partecipazione_utente` come rete di sicurezza.
+- `GET /api/partite/inviti` — bacheca inviti: le partite `creata` o `confermata` in cui l'utente ha un posto da invitato (`invitato=true`), ordinate per inizio effettivo crescente (a parità, id crescente). Per l'admin sempre `[]`. Risposta 200: `[ { id, idCampo, nomeCampo, dataPartita, oraInizio, oraFine, stato, tipo, nomeCreatore, cognomeCreatore } ]` (`stato` in minuscolo), `[]` se non ce ne sono. Partecipazione, partita, campo e creatore si leggono con una sola query (`JOIN FETCH`).
 
 ## Esempio di body per creare una prenotazione
 

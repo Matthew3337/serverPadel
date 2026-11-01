@@ -34,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -1193,6 +1194,513 @@ class PartitaServiceTest {
         private void stubStorico(Partecipazione pa) {
             when(partecipazioneRepository.findStoricoByTelefono(TEL_CREATORE, TipoPartecipazione.UTENTE,
                     StatoPartita.ANNULLATA)).thenReturn(List.of(pa));
+        }
+    }
+
+    // ============================================
+    // Utenti invitabili
+    // ============================================
+    @Nested
+    class Invitabili {
+
+        @Test
+        void adminRifiutatoCon403SenzaLeggereLaPartita() {
+            assertThatThrownBy(() -> service.getInvitabili(7, null, TEL_CREATORE, true))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può invitare");
+
+            verifyNoInteractions(partitaRepository, utenteRepository);
+        }
+
+        @Test
+        void inesistenteDa404() {
+            when(partitaRepository.findById(7)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.getInvitabili(7, null, TEL_CREATORE, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void privataNonVisibileDa404() {
+            stubPartita(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.getInvitabili(7, null, TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void estraneoCheVedeLaPubblicaDa403() {
+            stubPartita(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.getInvitabili(7, null, TEL_ESTRANEO, false))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può invitare");
+        }
+
+        @Test
+        void partecipanteNonCreatoreDa403() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            stubPartita(p);
+
+            assertThatThrownBy(() -> service.getInvitabili(7, null, TEL_2, false))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può invitare");
+            verify(utenteRepository, never()).findInvitabili(any(), any());
+        }
+
+        @Test
+        void creatoreRiceveGliUtentiDellaQueryNelFormatoDelContratto() {
+            stubPartita(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            Utente anna = new Utente(TEL_ESTRANEO, "Anna", "Bianchi", "x", LocalDate.of(1990, 1, 1), false, 5.0);
+            when(utenteRepository.findInvitabili(7, "%%")).thenReturn(List.of(anna, secondo));
+
+            List<PartitaDTO.InvitabileResponse> r = service.getInvitabili(7, null, TEL_CREATORE, false);
+
+            // L'ordine è quello della query (cognome, nome): il service non lo cambia
+            assertThat(r).extracting(PartitaDTO.InvitabileResponse::getTelefono).containsExactly(TEL_ESTRANEO, TEL_2);
+            PartitaDTO.InvitabileResponse prima = r.get(0);
+            assertThat(prima.getNome()).isEqualTo("Anna");
+            assertThat(prima.getCognome()).isEqualTo("Bianchi");
+            assertThat(prima.getLivello()).isEqualTo(5.0);
+        }
+
+        @Test
+        void ricercaVuotaOSoloSpaziCorrispondeATutti() {
+            stubPartita(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            when(utenteRepository.findInvitabili(7, "%%")).thenReturn(List.of());
+
+            service.getInvitabili(7, "   ", TEL_CREATORE, false);
+
+            verify(utenteRepository).findInvitabili(7, "%%");
+        }
+
+        @Test
+        void ricercaInMinuscoloSenzaSpaziAiLati() {
+            stubPartita(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            when(utenteRepository.findInvitabili(7, "%ros%")).thenReturn(List.of());
+
+            service.getInvitabili(7, "  RoS ", TEL_CREATORE, false);
+
+            verify(utenteRepository).findInvitabili(7, "%ros%");
+        }
+
+        @Test
+        void caratteriSpecialiDiLikeCercatiComeCaratteriNormali() {
+            stubPartita(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            when(utenteRepository.findInvitabili(7, "%a!%b!_c!!%")).thenReturn(List.of());
+
+            service.getInvitabili(7, "a%b_c!", TEL_CREATORE, false);
+
+            verify(utenteRepository).findInvitabili(7, "%a!%b!_c!!%");
+        }
+
+        @Test
+        void consentitoAncheAPartitaChiusaAgliInviti() {
+            // Il contratto prevede solo 404 e 403: l'elenco non dipende da stato e orario,
+            // sono invita e puoInvitare a bloccare l'invito
+            stubPartita(partita(StatoPartita.CONFERMATA, TipoPartita.PRIVATA, ADESSO.plusHours(13)));
+            when(utenteRepository.findInvitabili(7, "%%")).thenReturn(List.of(secondo));
+
+            assertThat(service.getInvitabili(7, null, TEL_CREATORE, false)).hasSize(1);
+        }
+    }
+
+    // ============================================
+    // Invito
+    // ============================================
+    @Nested
+    class Invito {
+
+        @Test
+        void adminRifiutatoCon403SenzaLeggereLaPartita() {
+            assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_CREATORE, true))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può invitare");
+
+            verifyNoInteractions(partitaRepository, utenteRepository);
+        }
+
+        @Test
+        void inesistenteDa404() {
+            when(partitaRepository.findByIdPerAggiornamento(7)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_CREATORE, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void privataNonVisibileDa404() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void estraneoCheVedeLaPubblicaDa403() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_ESTRANEO, false))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può invitare");
+        }
+
+        @Test
+        void partecipanteNonCreatoreDa403EPostiInvariati() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.invita(7, TEL_ESTRANEO, TEL_2, false))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può invitare");
+            assertThat(p.getPartecipazioni()).hasSize(2);
+        }
+
+        @Test
+        void confermataDa409NonPiuAperta() {
+            stubLock(partita(StatoPartita.CONFERMATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+
+            assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("La partita non è più aperta");
+        }
+
+        @Test
+        void annullataDa409NonPiuAperta() {
+            stubLock(partita(StatoPartita.ANNULLATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+
+            assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("La partita non è più aperta");
+        }
+
+        @Test
+        void esattamente24OrePrimaDa409InvitiChiusi() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(24));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Gli inviti sono chiusi: mancano meno di 24 ore all'inizio");
+            assertThat(p.getPartecipazioni()).hasSize(1);
+            verify(partitaRepository, never()).flush();
+        }
+
+        @Test
+        void unSecondoOltreLe24OreInvitoAmmesso() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(24).plusSeconds(1));
+            stubLock(p);
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+
+            service.invita(7, TEL_2, TEL_CREATORE, false);
+
+            assertThat(p.getPartecipazioni()).hasSize(2);
+        }
+
+        @Test
+        void dopoMezzanotteContaLInizioEffettivo() {
+            // Campo 18:00-02:00, serata del 2 novembre alle 00:30: inizia il 3 alle 00:30, 36h30 dopo adesso.
+            // Con data_partita + ora_inizio sarebbero 12h30 e l'invito verrebbe rifiutato per errore
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, LocalDateTime.of(2026, 11, 2, 0, 30));
+            p.setCampo(new Campo(2, "Campo Serale", false, LocalTime.of(18, 0), LocalTime.of(2, 0)));
+            stubLock(p);
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+
+            service.invita(7, TEL_2, TEL_CREATORE, false);
+
+            assertThat(p.getPartecipazioni()).hasSize(2);
+        }
+
+        @Test
+        void alCompletoDa409() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            aggiungi(p, 4, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.invita(7, TEL_ESTRANEO, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("La partita è al completo");
+            assertThat(p.getPartecipazioni()).hasSize(4);
+        }
+
+        @Test
+        void utenteInesistenteDa404() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.invita(7, TEL_ESTRANEO, TEL_CREATORE, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Utente non trovato");
+        }
+
+        @Test
+        void adminInvitatoDa409() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            stubLock(p);
+            Utente admin = new Utente(TEL_ESTRANEO, "Admin", "Circolo", "x", LocalDate.of(1990, 1, 1), true);
+            when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.of(admin));
+
+            assertThatThrownBy(() -> service.invita(7, TEL_ESTRANEO, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Non è possibile invitare un amministratore");
+            assertThat(p.getPartecipazioni()).hasSize(1);
+        }
+
+        @Test
+        void utenteGiaPartecipanteDa409() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, false));
+            stubLock(p);
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+
+            assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("L'utente partecipa già a questa partita");
+            assertThat(p.getPartecipazioni()).hasSize(2);
+        }
+
+        @Test
+        void creatoreCheInvitaSeStessoDa409() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            when(utenteRepository.findById(TEL_CREATORE)).thenReturn(Optional.of(creatore));
+
+            assertThatThrownBy(() -> service.invita(7, TEL_CREATORE, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("L'utente partecipa già a questa partita");
+        }
+
+        @Test
+        void invitoAggiungePartecipazioneUtenteInvitataNonConfermata() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            stubLock(p);
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+
+            PartitaDTO.DettaglioResponse r = service.invita(7, TEL_2, TEL_CREATORE, false);
+
+            verify(partitaRepository).flush();
+            assertThat(p.getPartecipazioni()).hasSize(2);
+            Partecipazione nuova = p.getPartecipazioni().get(1);
+            assertThat(nuova.getTipo()).isEqualTo(TipoPartecipazione.UTENTE);
+            assertThat(nuova.getUtente()).isSameAs(secondo);
+            assertThat(nuova.getPartita()).isSameAs(p);
+            assertThat(nuova.getInvitato()).isTrue();
+            assertThat(nuova.getConfermata()).isFalse();
+
+            // Il dettaglio è quello del creatore: può ancora invitare ed eliminare
+            assertThat(r.getId()).isEqualTo(7);
+            assertThat(r.getPosti()).extracting(PartitaDTO.PostoResponse::getTelefono)
+                    .containsExactly(TEL_CREATORE, TEL_2);
+            assertThat(r.getAzioni().getPuoInvitare()).isTrue();
+            assertThat(r.getAzioni().getPuoEliminare()).isTrue();
+            assertThat(r.getAzioni().getPuoUscire()).isFalse();
+        }
+
+        @Test
+        void invitoInPubblicaDiQualunqueLivello() {
+            // RF_GI_2: l'invito ignora il limite di ±1 della bacheca (creatore 2.5, invitato 5.0)
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3));
+            stubLock(p);
+            Utente lontano = new Utente(TEL_ESTRANEO, "Anna", "Bianchi", "x", LocalDate.of(1990, 1, 1), false, 5.0);
+            when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.of(lontano));
+
+            service.invita(7, TEL_ESTRANEO, TEL_CREATORE, false);
+
+            assertThat(p.getPartecipazioni().get(1).getUtente()).isSameAs(lontano);
+            assertThat(p.getPartecipazioni().get(1).getInvitato()).isTrue();
+        }
+
+        @Test
+        void invitoSullUltimoPostoAmmessoEPoiPuoInvitareFalse() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubLock(p);
+            stubEstraneo(2.5);
+
+            PartitaDTO.DettaglioResponse r = service.invita(7, TEL_ESTRANEO, TEL_CREATORE, false);
+
+            assertThat(r.getPosti()).hasSize(4);
+            assertThat(r.getAzioni().getPuoInvitare()).isFalse();
+            assertThat(r.getAzioni().getPuoEliminare()).isTrue();
+        }
+
+        @Test
+        void vincoloUnicoSulDbDiventaUtenteGiaPartecipante() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+            doThrow(new DataIntegrityViolationException(
+                    "Duplicate entry '7-3330000002' for key 'partecipazione.uk_partecipazione_utente'"))
+                    .when(partitaRepository).flush();
+
+            assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("L'utente partecipa già a questa partita");
+        }
+
+        @Test
+        void altraViolazioneDiIntegritaRilanciata() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+            doThrow(new DataIntegrityViolationException("altro vincolo")).when(partitaRepository).flush();
+
+            assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_CREATORE, false))
+                    .isInstanceOf(DataIntegrityViolationException.class);
+        }
+
+        @Test
+        void nonUsaFindByIdSenzaLock() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+
+            service.invita(7, TEL_2, TEL_CREATORE, false);
+
+            verify(partitaRepository, never()).findById(any());
+        }
+    }
+
+    // ============================================
+    // Coerenza tra puoInvitare e invita
+    // ============================================
+    // Per ogni combinazione di stato, istante (limite esatto delle 24 h e un secondo prima),
+    // richiedente e posti occupati, puoInvitare vale true esattamente quando invita va a buon fine
+    @Nested
+    class CoerenzaInviti {
+
+        @Test
+        void puoInvitareCoincideConInvita() {
+            // L'invitato esiste ed è invitabile: conta solo la parte di regole condivisa con il dettaglio
+            lenient().when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.of(
+                    new Utente(TEL_ESTRANEO, "Anna", "Bianchi", "x", LocalDate.of(1990, 1, 1), false, 2.5)));
+            for (StatoPartita stato : StatoPartita.values()) {
+                for (LocalDateTime inizio : List.of(ADESSO.plusHours(24), ADESSO.plusHours(24).plusSeconds(1))) {
+                    for (String telefono : List.of(TEL_CREATORE, TEL_2)) {
+                        for (boolean completa : List.of(false, true)) {
+                            stubPartita(scenario(stato, inizio, completa));
+                            boolean puo = service.getDettaglio(7, telefono, false).getAzioni().getPuoInvitare();
+
+                            stubLock(scenario(stato, inizio, completa));
+                            boolean riuscito = riesce(() -> service.invita(7, TEL_ESTRANEO, telefono, false));
+
+                            assertThat(riuscito).as("%s, inizio %s, %s, completa %s", stato, inizio, telefono,
+                                    completa).isEqualTo(puo);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Partita privata con creatore e secondo giocatore, più due posti CAMPO se completa
+        private Partita scenario(StatoPartita stato, LocalDateTime inizio, boolean completa) {
+            Partita p = partita(stato, TipoPartita.PRIVATA, inizio);
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            if (completa) {
+                aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+                aggiungi(p, 4, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            }
+            return p;
+        }
+
+        private boolean riesce(Runnable azione) {
+            try {
+                azione.run();
+                return true;
+            } catch (AccessoNegatoException | BusinessRuleException ex) {
+                return false;
+            }
+        }
+    }
+
+    // ============================================
+    // Bacheca inviti
+    // ============================================
+    @Nested
+    class BachecaInviti {
+
+        @Test
+        void adminRiceveListaVuotaSenzaInterrogareIlDb() {
+            assertThat(service.getBachecaInviti(TEL_2, true)).isEmpty();
+
+            verifyNoInteractions(partecipazioneRepository, partitaRepository);
+        }
+
+        @Test
+        void usaLaQueryConUtenteECreataOConfermata() {
+            when(partecipazioneRepository.findInvitiByTelefono(TEL_2, TipoPartecipazione.UTENTE,
+                    List.of(StatoPartita.CREATA, StatoPartita.CONFERMATA))).thenReturn(List.of());
+
+            assertThat(service.getBachecaInviti(TEL_2, false)).isEmpty();
+
+            verify(partecipazioneRepository).findInvitiByTelefono(TEL_2, TipoPartecipazione.UTENTE,
+                    List.of(StatoPartita.CREATA, StatoPartita.CONFERMATA));
+            verifyNoInteractions(partitaRepository);
+        }
+
+        @Test
+        void formatoDellaRiga() {
+            Partita p = partita(StatoPartita.CONFERMATA, TipoPartita.PRIVATA, LocalDateTime.of(2026, 11, 5, 18, 0));
+            Partecipazione invito = new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false);
+            aggiungi(p, 2, invito);
+            stubInviti(invito);
+
+            List<PartitaDTO.InvitoRicevutoResponse> r = service.getBachecaInviti(TEL_2, false);
+
+            assertThat(r).hasSize(1);
+            PartitaDTO.InvitoRicevutoResponse riga = r.get(0);
+            assertThat(riga.getId()).isEqualTo(7);
+            assertThat(riga.getIdCampo()).isEqualTo(1);
+            assertThat(riga.getNomeCampo()).isEqualTo("Campo 1");
+            assertThat(riga.getDataPartita()).isEqualTo(LocalDate.of(2026, 11, 5));
+            assertThat(riga.getOraInizio()).isEqualTo(LocalTime.of(18, 0));
+            assertThat(riga.getOraFine()).isEqualTo(LocalTime.of(19, 30));
+            assertThat(riga.getStato()).isEqualTo("confermata");
+            assertThat(riga.getTipo()).isEqualTo("PRIVATA");
+            assertThat(riga.getNomeCreatore()).isEqualTo("Mario");
+            assertThat(riga.getCognomeCreatore()).isEqualTo("Rossi");
+        }
+
+        @Test
+        void ordinataPerInizioEffettivoCrescenteAncheDopoMezzanotte() {
+            // Campo aperto dalle 18:00 alle 02:00: lo slot delle 00:30 della serata del 5 inizia il 6
+            Campo notturno = new Campo(2, "Campo notte", true, LocalTime.of(18, 0), LocalTime.of(2, 0));
+            Partecipazione serata = invitoIn(10, notturno, LocalDate.of(2026, 11, 5), LocalTime.of(18, 0));
+            Partecipazione dopoMezzanotte = invitoIn(11, notturno, LocalDate.of(2026, 11, 5), LocalTime.of(0, 30));
+            Partecipazione prima = invitoIn(12, campoDiurno, LocalDate.of(2026, 11, 3), LocalTime.of(10, 0));
+            Partecipazione dopo = invitoIn(13, campoDiurno, LocalDate.of(2026, 11, 20), LocalTime.of(10, 0));
+            // Stesso inizio di "serata" su un altro campo: a parità viene prima l'id più basso
+            Partecipazione stessoInizio = invitoIn(9, campoDiurno, LocalDate.of(2026, 11, 5), LocalTime.of(18, 0));
+            stubInviti(serata, dopo, dopoMezzanotte, stessoInizio, prima);
+
+            List<Integer> ids = service.getBachecaInviti(TEL_2, false).stream()
+                    .map(PartitaDTO.InvitoRicevutoResponse::getId)
+                    .toList();
+
+            assertThat(ids).containsExactly(12, 9, 10, 11, 13);
+        }
+
+        private Partecipazione invitoIn(int id, Campo campo, LocalDate data, LocalTime ora) {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, LocalDateTime.of(data, ora));
+            p.setId(id);
+            p.setCampo(campo);
+            Partecipazione invito = new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false);
+            aggiungi(p, 2, invito);
+            return invito;
+        }
+
+        private void stubInviti(Partecipazione... inviti) {
+            when(partecipazioneRepository.findInvitiByTelefono(TEL_2, TipoPartecipazione.UTENTE,
+                    List.of(StatoPartita.CREATA, StatoPartita.CONFERMATA))).thenReturn(List.of(inviti));
         }
     }
 

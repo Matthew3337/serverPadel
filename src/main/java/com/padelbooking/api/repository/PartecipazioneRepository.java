@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 
 public interface PartecipazioneRepository extends JpaRepository<Partecipazione, Integer> {
@@ -27,4 +28,22 @@ public interface PartecipazioneRepository extends JpaRepository<Partecipazione, 
     List<Partecipazione> findStoricoByTelefono(@Param("telefono") String telefono,
                                                @Param("tipoUtente") TipoPartecipazione tipoUtente,
                                                @Param("statoEscluso") StatoPartita statoEscluso);
+
+    // Bacheca inviti (RF_GI_6): le partecipazioni UTENTE dell'utente nate da un invito, nelle partite
+    // con uno degli stati indicati (si passano CREATA e CONFERMATA). Partita, campo e creatore sono in
+    // JOIN FETCH perché servono a ogni riga della risposta: una sola query per l'intera bacheca.
+    // L'ordine sull'inizio effettivo lo fa il service.
+    @Query("""
+            SELECT pa FROM Partecipazione pa
+            JOIN FETCH pa.partita p
+            JOIN FETCH p.campo
+            JOIN FETCH p.creatore
+            WHERE pa.tipo = :tipoUtente
+              AND pa.utente.telefono = :telefono
+              AND pa.invitato = true
+              AND p.stato IN :stati
+            """)
+    List<Partecipazione> findInvitiByTelefono(@Param("telefono") String telefono,
+                                              @Param("tipoUtente") TipoPartecipazione tipoUtente,
+                                              @Param("stati") Collection<StatoPartita> stati);
 }

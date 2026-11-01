@@ -3,13 +3,14 @@ package com.padelbooking.api.controller;
 import com.padelbooking.api.dto.PartitaDTO;
 import com.padelbooking.api.security.UtentePrincipal;
 import com.padelbooking.api.service.PartitaService;
+import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-// Operazioni sulla singola partita: dettaglio, bacheca, storico e azioni dei partecipanti
+// Operazioni sulla singola partita: dettaglio, bacheche, storico, inviti e azioni dei partecipanti
 @RestController
 @RequestMapping("/api/partite")
 public class PartitaController {
@@ -38,6 +39,16 @@ public class PartitaController {
             @AuthenticationPrincipal UtentePrincipal principal) {
         boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
         return ResponseEntity.ok(partitaService.getStorico(principal.getTelefono(), isAdmin));
+    }
+
+    // Bacheca inviti: le partite creata o confermata in cui l'utente autenticato è stato invitato.
+    // Come "pubbliche", il path letterale ha la precedenza su /{id}
+    // GET /api/partite/inviti
+    @GetMapping("/inviti")
+    public ResponseEntity<List<PartitaDTO.InvitoRicevutoResponse>> getBachecaInviti(
+            @AuthenticationPrincipal UtentePrincipal principal) {
+        boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
+        return ResponseEntity.ok(partitaService.getBachecaInviti(principal.getTelefono(), isAdmin));
     }
 
     // Dettaglio con posti e azioni disponibili per l'utente autenticato
@@ -76,5 +87,26 @@ public class PartitaController {
         boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
         partitaService.esci(id, principal.getTelefono(), isAdmin);
         return ResponseEntity.noContent().build();
+    }
+
+    // Utenti che il creatore può invitare, filtrati facoltativamente per nome o cognome
+    // GET /api/partite/7/invitabili?cerca=ros
+    @GetMapping("/{id}/invitabili")
+    public ResponseEntity<List<PartitaDTO.InvitabileResponse>> getInvitabili(
+            @PathVariable Integer id,
+            @RequestParam(required = false) String cerca,
+            @AuthenticationPrincipal UtentePrincipal principal) {
+        boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
+        return ResponseEntity.ok(partitaService.getInvitabili(id, cerca, principal.getTelefono(), isAdmin));
+    }
+
+    // Invito da parte del creatore: l'utente entra subito nella partita, restituisce il dettaglio aggiornato
+    // POST /api/partite/7/inviti  { "telefono": "333..." }
+    @PostMapping("/{id}/inviti")
+    public ResponseEntity<PartitaDTO.DettaglioResponse> invita(@PathVariable Integer id,
+                                                               @Valid @RequestBody PartitaDTO.InvitoRequest request,
+                                                               @AuthenticationPrincipal UtentePrincipal principal) {
+        boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
+        return ResponseEntity.ok(partitaService.invita(id, request.getTelefono(), principal.getTelefono(), isAdmin));
     }
 }
