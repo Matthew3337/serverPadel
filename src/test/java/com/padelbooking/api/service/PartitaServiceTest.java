@@ -1704,6 +1704,237 @@ class PartitaServiceTest {
         }
     }
 
+    // ============================================
+    // Conferma
+    // ============================================
+    @Nested
+    class Conferma {
+
+        private static final String FUORI_FINESTRA = "La conferma è possibile solo tra 24 e 12 ore prima dell'inizio";
+
+        @Test
+        void adminRiceve403SenzaLeggereLaPartita() {
+            assertThatThrownBy(() -> service.conferma(7, TEL_CREATORE, true))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("L'amministratore non conferma le partite");
+            verifyNoInteractions(partitaRepository);
+        }
+
+        @Test
+        void inesistenteDa404() {
+            when(partitaRepository.findByIdPerAggiornamento(7)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.conferma(7, TEL_CREATORE, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void privataNonVisibileAEstraneoDa404() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(20)));
+
+            assertThatThrownBy(() -> service.conferma(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void estraneoSuPubblicaVisibileNonPartecipa() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusHours(20)));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.conferma(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Non partecipi a questa partita");
+        }
+
+        @Test
+        void giaConfermatoDa409() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(20));
+            p.getPartecipazioni().get(0).setConfermata(true);
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.conferma(7, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Hai già confermato la partecipazione");
+        }
+
+        @Test
+        void partitaNonCreataDa409() {
+            stubLock(partita(StatoPartita.ANNULLATA, TipoPartita.PRIVATA, ADESSO.plusHours(20)));
+
+            assertThatThrownBy(() -> service.conferma(7, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("La partita non è più aperta");
+        }
+
+        @Test
+        void esattamenteA24OreLaFinestraEAperta() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(24)));
+
+            PartitaDTO.DettaglioResponse r = service.conferma(7, TEL_CREATORE, false);
+
+            assertThat(r.getPosti().get(0).getConfermata()).isTrue();
+        }
+
+        @Test
+        void unSecondoPrimaDelle24OreLaFinestraEChiusa() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(24).plusSeconds(1)));
+
+            assertThatThrownBy(() -> service.conferma(7, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(FUORI_FINESTRA);
+        }
+
+        @Test
+        void unSecondoPrimaDelle12OreLaFinestraEAncoraAperta() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(12).plusSeconds(1)));
+
+            assertThat(service.conferma(7, TEL_CREATORE, false).getPosti().get(0).getConfermata()).isTrue();
+        }
+
+        @Test
+        void esattamenteA12OreLaFinestraEChiusa() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(12)));
+
+            assertThatThrownBy(() -> service.conferma(7, TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(FUORI_FINESTRA);
+        }
+
+        @Test
+        void confermaConPostiLiberiLasciaLaPartitaCreata() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(20));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, true));
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubLock(p);
+
+            PartitaDTO.DettaglioResponse r = service.conferma(7, TEL_CREATORE, false);
+
+            assertThat(p.getPartecipazioni().get(0).getConfermata()).isTrue();
+            assertThat(r.getStato()).isEqualTo("creata");
+            assertThat(r.getAzioni().getPuoConfermare()).isFalse();
+        }
+
+        @Test
+        void ultimoUtenteCheConfermaRendeLaPartitaConfermataAncheConPostiCampoNonConfermati() {
+            // RF_GC_5, RF_GC_6: due utenti e due posti CAMPO, che non confermano mai
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(20));
+            p.getPartecipazioni().get(0).setConfermata(true);
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            aggiungi(p, 4, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubLock(p);
+
+            PartitaDTO.DettaglioResponse r = service.conferma(7, TEL_2, false);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CONFERMATA);
+            assertThat(r.getStato()).isEqualTo("confermata");
+            assertThat(r.getPosti()).extracting(PartitaDTO.PostoResponse::getConfermata)
+                    .containsExactly(true, true, false, false);
+            assertTutteFalse(r.getAzioni());
+        }
+
+        @Test
+        void con4PostiMaUnUtenteNonConfermatoRestaCreata() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(20));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            aggiungi(p, 4, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubLock(p);
+
+            PartitaDTO.DettaglioResponse r = service.conferma(7, TEL_CREATORE, false);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+            assertThat(r.getStato()).isEqualTo("creata");
+        }
+
+        @Test
+        void partitaDopoMezzanotteUsaInizioEffettivo() {
+            // Campo 18:00-02:00, serata del 1° novembre, ore 00:30: inizia il 2 novembre alle 00:30,
+            // fra 12h30, quindi nella finestra. Con data_partita + ora sarebbe già iniziata.
+            Campo serale = new Campo(2, "Campo Serale", false, LocalTime.of(18, 0), LocalTime.of(2, 0));
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, LocalDateTime.of(2026, 11, 1, 0, 30));
+            p.setCampo(serale);
+            p.setOraFine(LocalTime.of(2, 0));
+            stubLock(p);
+
+            assertThat(service.conferma(7, TEL_CREATORE, false).getPosti().get(0).getConfermata()).isTrue();
+        }
+
+        @Test
+        void nonUsaFindByIdSenzaLock() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(20)));
+
+            service.conferma(7, TEL_CREATORE, false);
+
+            verify(partitaRepository, never()).findById(any());
+        }
+    }
+
+    // ============================================
+    // Coerenza tra puoConfermare e conferma
+    // ============================================
+    @Nested
+    class CoerenzaConferma {
+
+        @Test
+        void puoConfermareCoincideConConferma() {
+            List<LocalDateTime> inizi = List.of(ADESSO.plusHours(24).plusSeconds(1), ADESSO.plusHours(24),
+                    ADESSO.plusHours(12).plusSeconds(1), ADESSO.plusHours(12));
+            for (StatoPartita stato : StatoPartita.values()) {
+                for (LocalDateTime inizio : inizi) {
+                    for (String telefono : List.of(TEL_CREATORE, TEL_2, TEL_ESTRANEO)) {
+                        for (boolean giaConfermato : List.of(false, true)) {
+                            stubPartita(scenario(stato, inizio, giaConfermato));
+                            boolean puo = puoConfermareOppureNonVisibile(telefono);
+
+                            stubLock(scenario(stato, inizio, giaConfermato));
+                            boolean riuscita = riesce(() -> service.conferma(7, telefono, false));
+
+                            assertThat(riuscita).as("%s, inizio %s, %s, già confermato %s", stato, inizio,
+                                    telefono, giaConfermato).isEqualTo(puo);
+                        }
+                    }
+                }
+            }
+        }
+
+        // L'estraneo vede la pubblica (stesso livello del creatore) ma non partecipa;
+        // se il dettaglio non è visibile, anche la conferma deve fallire
+        private boolean puoConfermareOppureNonVisibile(String telefono) {
+            try {
+                return service.getDettaglio(7, telefono, false).getAzioni().getPuoConfermare();
+            } catch (ResourceNotFoundException ex) {
+                return false;
+            }
+        }
+
+        // Partita pubblica con creatore, secondo giocatore e un posto CAMPO
+        private Partita scenario(StatoPartita stato, LocalDateTime inizio, boolean giaConfermato) {
+            Partita p = partita(stato, TipoPartita.PUBBLICA, inizio);
+            p.getPartecipazioni().get(0).setConfermata(giaConfermato);
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, giaConfermato));
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            return p;
+        }
+
+        private boolean riesce(Runnable azione) {
+            try {
+                azione.run();
+                return true;
+            } catch (AccessoNegatoException | BusinessRuleException | ResourceNotFoundException ex) {
+                return false;
+            }
+        }
+
+        @BeforeEach
+        void stubEstraneoStessoLivello() {
+            lenient().when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.of(
+                    new Utente(TEL_ESTRANEO, "Anna", "Bianchi", "x", LocalDate.of(1990, 1, 1), false, 2.5)));
+        }
+    }
+
     private void stubLock(Partita p) {
         when(partitaRepository.findByIdPerAggiornamento(p.getId())).thenReturn(Optional.of(p));
     }

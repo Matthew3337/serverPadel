@@ -68,6 +68,13 @@ public final class RegoleTempoPartita {
                 && adesso.isBefore(inizio.minusHours(LIMITE_CONFERMA_ORE));
     }
 
+    // inizio <= adesso: la partita è iniziata, quindi l'attività pianificata la annulla se non è
+    // confermata con 4 posti (RF_GC_9, RF_GC_10). "<=" e non "nel minuto esatto": dopo un fermo
+    // del server la scadenza resta maturata e viene recuperata al primo giro (RNF_A_3)
+    public static boolean iniziata(Partita partita, LocalDateTime adesso) {
+        return !adesso.isBefore(inizioEffettivo(partita));
+    }
+
     // fine <= adesso <= fine + 24 h: registrazione del risultato
     public static boolean inFinestraRisultato(Partita partita, LocalDateTime adesso) {
         LocalDateTime fine = fineEffettiva(partita);

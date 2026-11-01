@@ -73,6 +73,24 @@ public interface PartitaRepository extends JpaRepository<Partita, Integer> {
                                            @Param("stato") StatoPartita stato,
                                            @Param("dataDa") LocalDate dataDa);
 
+    // Candidate per l'attività pianificata delle scadenze (ScadenzePartiteService): le partite CREATA, e le
+    // CONFERMATA con meno di 4 posti, con data_partita fino a una data, senza limite verso il passato,
+    // così dopo un fermo si recuperano anche le scadenze già maturate (RNF_A_3).
+    // Le CONFERMATA con 4 posti si escludono già qui: per loro non c'è nessun passo da fare, e
+    // altrimenti quelle passate senza risultato verrebbero rilette a ogni giro.
+    // Campo in JOIN FETCH perché serve all'inizio effettivo, calcolato in Java come nella bacheca.
+    @Query("""
+            SELECT p FROM Partita p
+            JOIN FETCH p.campo
+            WHERE (p.stato = :statoCreata
+                   OR (p.stato = :statoConfermata AND SIZE(p.partecipazioni) < :postiMax))
+              AND p.dataPartita <= :dataFino
+            """)
+    List<Partita> findCandidateScadenze(@Param("statoCreata") StatoPartita statoCreata,
+                                        @Param("statoConfermata") StatoPartita statoConfermata,
+                                        @Param("postiMax") int postiMax,
+                                        @Param("dataFino") LocalDate dataFino);
+
     // Partita con lock in scrittura (SELECT ... FOR UPDATE) fino alla fine della transazione:
     // serve all'ingresso, così due richieste simultanee sull'ultimo posto vengono serializzate
     // e la seconda vede la partecipazione aggiunta dalla prima
