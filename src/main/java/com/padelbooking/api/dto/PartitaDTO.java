@@ -25,13 +25,17 @@ public class PartitaDTO {
         // Solo i posti occupati, con il creatore per primo
         private List<PostoResponse> posti;
         private AzioniResponse azioni;
+        // null finché il risultato non è registrato; visto dall'utente del token
+        private RisultatoResponse risultato;
         public DettaglioResponse() { }
         public DettaglioResponse(Integer id, Integer idCampo, String nomeCampo, LocalDate dataPartita,
                                  LocalTime oraInizio, LocalTime oraFine, String stato, String tipo,
-                                 String telefonoCreatore, List<PostoResponse> posti, AzioniResponse azioni) {
+                                 String telefonoCreatore, List<PostoResponse> posti, AzioniResponse azioni,
+                                 RisultatoResponse risultato) {
             this.id = id; this.idCampo = idCampo; this.nomeCampo = nomeCampo; this.dataPartita = dataPartita;
             this.oraInizio = oraInizio; this.oraFine = oraFine; this.stato = stato; this.tipo = tipo;
             this.telefonoCreatore = telefonoCreatore; this.posti = posti; this.azioni = azioni;
+            this.risultato = risultato;
         }
         public Integer getId() { return id; }
         public void setId(Integer value) { this.id = value; }
@@ -55,10 +59,14 @@ public class PartitaDTO {
         public void setPosti(List<PostoResponse> value) { this.posti = value; }
         public AzioniResponse getAzioni() { return azioni; }
         public void setAzioni(AzioniResponse value) { this.azioni = value; }
+        public RisultatoResponse getRisultato() { return risultato; }
+        public void setRisultato(RisultatoResponse value) { this.risultato = value; }
     }
 
     // Un posto occupato: per i giocatori CAMPO (messi dal circolo) i dati dell'utente sono null
     public static class PostoResponse {
+        // Id della partecipazione: è il valore da mandare nelle squadre di POST /api/partite/{id}/risultato
+        private Integer idPosto;
         // UTENTE o CAMPO
         private String tipo;
         private String telefono;
@@ -66,11 +74,16 @@ public class PartitaDTO {
         private String cognome;
         private Double livello;
         private Boolean confermata;
+        // 1 o 2; null finché il risultato non è registrato
+        private Integer squadra;
         public PostoResponse() { }
-        public PostoResponse(String tipo, String telefono, String nome, String cognome, Double livello, Boolean confermata) {
-            this.tipo = tipo; this.telefono = telefono; this.nome = nome; this.cognome = cognome;
-            this.livello = livello; this.confermata = confermata;
+        public PostoResponse(Integer idPosto, String tipo, String telefono, String nome, String cognome, Double livello,
+                             Boolean confermata, Integer squadra) {
+            this.idPosto = idPosto; this.tipo = tipo; this.telefono = telefono; this.nome = nome;
+            this.cognome = cognome; this.livello = livello; this.confermata = confermata; this.squadra = squadra;
         }
+        public Integer getIdPosto() { return idPosto; }
+        public void setIdPosto(Integer value) { this.idPosto = value; }
         public String getTipo() { return tipo; }
         public void setTipo(String value) { this.tipo = value; }
         public String getTelefono() { return telefono; }
@@ -83,6 +96,8 @@ public class PartitaDTO {
         public void setLivello(Double value) { this.livello = value; }
         public Boolean getConfermata() { return confermata; }
         public void setConfermata(Boolean value) { this.confermata = value; }
+        public Integer getSquadra() { return squadra; }
+        public void setSquadra(Integer value) { this.squadra = value; }
     }
 
     // Azioni che l'utente del token può fare adesso sulla partita: il client mostra solo i pulsanti a true
@@ -196,7 +211,7 @@ public class PartitaDTO {
     }
 
     // Risultato dal punto di vista dell'utente: squadraUtente ed esito sono null se l'utente non ha
-    // una squadra, puntiAssegnati è null finché i punteggi non sono calcolati (T10)
+    // una squadra (anche l'admin e chi non gioca), puntiAssegnati è null finché i punteggi non sono calcolati (T10)
     public static class RisultatoResponse {
         // Solo i set giocati: 2 o 3
         private List<SetResponse> set;
@@ -225,6 +240,40 @@ public class PartitaDTO {
         private Integer squadra2;
         public SetResponse() { }
         public SetResponse(Integer squadra1, Integer squadra2) {
+            this.squadra1 = squadra1; this.squadra2 = squadra2;
+        }
+        public Integer getSquadra1() { return squadra1; }
+        public void setSquadra1(Integer value) { this.squadra1 = value; }
+        public Integer getSquadra2() { return squadra2; }
+        public void setSquadra2(Integer value) { this.squadra2 = value; }
+    }
+
+    // Body di POST /api/partite/{id}/risultato. Niente annotazioni di validazione: i messaggi sono quelli
+    // del contratto, senza il prefisso del campo, e il controllo sta nel service dopo quelli sulla
+    // partita, perché le squadre si confrontano con i suoi posti e chi non la vede deve ricevere 404
+    public static class RisultatoRequest {
+        // Gli idPosto dei giocatori di ciascuna squadra, giocatori campo compresi
+        private List<Integer> squadra1;
+        private List<Integer> squadra2;
+        private List<SetRequest> set;
+        public RisultatoRequest() { }
+        public RisultatoRequest(List<Integer> squadra1, List<Integer> squadra2, List<SetRequest> set) {
+            this.squadra1 = squadra1; this.squadra2 = squadra2; this.set = set;
+        }
+        public List<Integer> getSquadra1() { return squadra1; }
+        public void setSquadra1(List<Integer> value) { this.squadra1 = value; }
+        public List<Integer> getSquadra2() { return squadra2; }
+        public void setSquadra2(List<Integer> value) { this.squadra2 = value; }
+        public List<SetRequest> getSet() { return set; }
+        public void setSet(List<SetRequest> value) { this.set = value; }
+    }
+
+    // I game fatti da ciascuna squadra in un set della richiesta
+    public static class SetRequest {
+        private Integer squadra1;
+        private Integer squadra2;
+        public SetRequest() { }
+        public SetRequest(Integer squadra1, Integer squadra2) {
             this.squadra1 = squadra1; this.squadra2 = squadra2;
         }
         public Integer getSquadra1() { return squadra1; }

@@ -4,6 +4,7 @@ import com.padelbooking.api.dto.PartitaDTO;
 import com.padelbooking.api.exception.AccessoNegatoException;
 import com.padelbooking.api.exception.BusinessRuleException;
 import com.padelbooking.api.exception.ResourceNotFoundException;
+import com.padelbooking.api.exception.RichiestaNonValidaException;
 import com.padelbooking.api.model.Partecipazione;
 import com.padelbooking.api.model.Partita;
 import com.padelbooking.api.model.StatoPartita;
@@ -19,10 +20,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 public class PartitaService {
@@ -71,6 +76,20 @@ public class PartitaService {
     private static final String MESSAGGIO_CONFERMA_FUORI_FINESTRA =
             "La conferma è possibile solo tra 24 e 12 ore prima dell'inizio";
 
+    // Messaggi della registrazione del risultato (RNF_U_3): fanno parte del contratto con il client.
+    // Quelli sui set stanno in RegoleRisultatoPartita
+    private static final String MESSAGGIO_ADMIN_NON_REGISTRA = "L'amministratore modifica i risultati dalla propria area";
+    private static final String MESSAGGIO_RISULTATO_GIA_REGISTRATO = "Il risultato è già stato registrato";
+    private static final String MESSAGGIO_RISULTATO_SOLO_CONFERMATE =
+            "Il risultato si può registrare solo per le partite confermate";
+    private static final String MESSAGGIO_PARTITA_NON_FINITA = "La partita non è ancora finita";
+    private static final String MESSAGGIO_TERMINE_RISULTATO_SCADUTO = "Il termine per registrare il risultato è scaduto";
+    private static final String MESSAGGIO_GIOCATORI_PER_SQUADRA = "Ogni squadra deve avere 2 giocatori";
+    private static final String MESSAGGIO_SQUADRE_POSTI = "Le squadre devono contenere i 4 posti della partita";
+
+    // RF_GR_3: 4 posti divisi in due squadre
+    private static final int GIOCATORI_PER_SQUADRA = 2;
+
     // Carattere di escape per i LIKE della ricerca degli invitabili (vedi UtenteRepository.findInvitabili)
     private static final char ESCAPE_LIKE = '!';
 
@@ -112,12 +131,12 @@ public class PartitaService {
             throw partitaNonTrovata(idPartita);
         }
 
-        PartitaDTO.AzioniResponse azioni = isAdmin
-                // L'admin gestisce le partite dalla sua pagina: qui non ha azioni
-                ? new PartitaDTO.AzioniResponse(false, false, false, false, false)
-                : calcolaAzioni(partita, partecipazione.orElse(null), LocalDateTime.now(clock));
-
-        return toDettaglioResponse(partita, azioni);
+        if (isAdmin) {
+            // L'admin gestisce le partite dalla sua pagina: qui non ha azioni, e il risultato non ha il suo punto di vista
+            return toDettaglioResponse(partita, new PartitaDTO.AzioniResponse(false, false, false, false, false), null);
+        }
+        Partecipazione delRichiedente = partecipazione.orElse(null);
+        return toDettaglioResponse(partita, calcolaAzioni(partita, delRichiedente, LocalDateTime.now(clock)), delRichiedente);
     }
 
     // ============================================
@@ -231,7 +250,7 @@ public class PartitaService {
             throw ex;
         }
 
-        return toDettaglioResponse(partita, calcolaAzioni(partita, nuova, adesso));
+        return toDettaglioResponse(partita, calcolaAzioni(partita, nuova, adesso), nuova);
     }
 
     // ============================================
@@ -368,7 +387,7 @@ public class PartitaService {
 
         // T13: notifica di invito (RF_GN_1)
 
-        return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso));
+        return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso), partecipazione);
     }
 
     // ============================================
@@ -401,7 +420,56 @@ public class PartitaService {
             // T13: notifica ADMIN_CONFERMA all'amministratore (RF_GN_8)
         }
 
-        return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso));
+        return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso), partecipazione);
+    }
+
+    // ============================================
+    // Registrazione del risultato
+    // ============================================
+    // UC_GR_1, RF_GR_1–8: un partecipante UTENTE registra squadre e set tra la fine della partita e 24 ore
+    // dopo. Il risultato vale subito, senza conferme degli altri giocatori (RF_GR_7), e la partita passa
+    // a GIOCATA. Valgono le stesse regole di puoRegistrareRisultato.
+    @Transactional
+    public PartitaDTO.DettaglioResponse registraRisultato(Integer idPartita, PartitaDTO.RisultatoRequest request,
+                                                          String telefonoRichiedente, boolean isAdmin) {
+        if (isAdmin) {
+            throw new AccessoNegatoException(MESSAGGIO_ADMIN_NON_REGISTRA);
+        }
+
+        // Lock come prima lettura, come in entra: due giocatori che registrano insieme si serializzano,
+        // quindi il secondo trova la partita già GIOCATA e riceve il 409 senza sovrascrivere il primo
+        Partita partita = partitaRepository.findByIdPerAggiornamento(idPartita)
+                .orElseThrow(() -> partitaNonTrovata(idPartita));
+        Partecipazione partecipazione = verificaVisibileOLancia(partita, telefonoRichiedente);
+
+        LocalDateTime adesso = LocalDateTime.now(clock);
+        Optional<RuntimeException> rifiuto = rifiutoRisultato(partita, partecipazione, adesso);
+        if (rifiuto.isPresent()) {
+            throw rifiuto.get();
+        }
+
+        verificaSquadre(partita, request.getSquadra1(), request.getSquadra2());
+        List<RegoleRisultatoPartita.SetInserito> set = setInseriti(request.getSet());
+        Optional<String> setNonValidi = RegoleRisultatoPartita.rifiutoSet(set);
+        if (setNonValidi.isPresent()) {
+            throw new RichiestaNonValidaException(setNonValidi.get());
+        }
+
+        // Partita e partecipazioni sono gestite dall'EntityManager: le modifiche le scrive il dirty checking al commit
+        scriviSet(partita, set);
+        partita.setRegistrante(partecipazione.getUtente());
+        // Dal Clock iniettato, come "adesso", e non dall'orologio del database
+        partita.setDataRisultato(adesso);
+        for (Partecipazione posto : partita.getPartecipazioni()) {
+            posto.setSquadra(request.getSquadra1().contains(posto.getId())
+                    ? RegoleRisultatoPartita.SQUADRA_1
+                    : RegoleRisultatoPartita.SQUADRA_2);
+        }
+        partita.setStato(StatoPartita.GIOCATA);
+
+        // T10: UC_GCL_2 aggiornamento punteggi
+
+        return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso), partecipazione);
     }
 
     // ============================================
@@ -516,6 +584,73 @@ public class PartitaService {
         return Optional.empty();
     }
 
+    // Come rifiutoEliminazione, per il risultato: condivisa da registraRisultato e da puoRegistrareRisultato.
+    // partecipazione è sempre un posto UTENTE (trovaPartecipazioneUtente), quindi i posti CAMPO non
+    // registrano. Una partita GIOCATA dà "già registrato" prima del controllo sullo stato, come in rifiutoConferma.
+    private Optional<RuntimeException> rifiutoRisultato(Partita partita, Partecipazione partecipazione,
+                                                        LocalDateTime adesso) {
+        if (partecipazione == null) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_NON_PARTECIPI));
+        }
+        if (partita.getStato() == StatoPartita.GIOCATA || RegoleRisultatoPartita.risultatoRegistrato(partita)) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_RISULTATO_GIA_REGISTRATO));
+        }
+        if (partita.getStato() != StatoPartita.CONFERMATA) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_RISULTATO_SOLO_CONFERMATE));
+        }
+        if (!RegoleTempoPartita.finita(partita, adesso)) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_PARTITA_NON_FINITA));
+        }
+        if (!RegoleTempoPartita.inFinestraRisultato(partita, adesso)) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_TERMINE_RISULTATO_SCADUTO));
+        }
+        return Optional.empty();
+    }
+
+    // RF_GR_3: due giocatori per squadra e, insieme, esattamente i 4 posti della partita, giocatori
+    // campo compresi. Il confronto tra insiemi scarta sia gli id ripetuti sia quelli di altre partite;
+    // il controllo su POSTI_MAX serve se la partita ha meno di 4 posti e un id è ripetuto.
+    private void verificaSquadre(Partita partita, List<Integer> squadra1, List<Integer> squadra2) {
+        if (squadra1 == null || squadra2 == null
+                || squadra1.size() != GIOCATORI_PER_SQUADRA || squadra2.size() != GIOCATORI_PER_SQUADRA) {
+            throw new RichiestaNonValidaException(MESSAGGIO_GIOCATORI_PER_SQUADRA);
+        }
+        Set<Integer> inseriti = new HashSet<>(squadra1);
+        inseriti.addAll(squadra2);
+        Set<Integer> postiPartita = partita.getPartecipazioni().stream()
+                .map(Partecipazione::getId)
+                .collect(Collectors.toSet());
+        if (inseriti.size() != POSTI_MAX || !inseriti.equals(postiPartita)) {
+            throw new RichiestaNonValidaException(MESSAGGIO_SQUADRE_POSTI);
+        }
+    }
+
+    // Una lista o un set mancanti nel JSON arrivano come null: li giudica RegoleRisultatoPartita
+    private List<RegoleRisultatoPartita.SetInserito> setInseriti(List<PartitaDTO.SetRequest> set) {
+        if (set == null) {
+            return null;
+        }
+        List<RegoleRisultatoPartita.SetInserito> inseriti = new ArrayList<>();
+        for (PartitaDTO.SetRequest s : set) {
+            inseriti.add(s == null
+                    ? new RegoleRisultatoPartita.SetInserito(null, null)
+                    : new RegoleRisultatoPartita.SetInserito(s.getSquadra1(), s.getSquadra2()));
+        }
+        return inseriti;
+    }
+
+    // Con 2 set le colonne del terzo restano NULL, come richiede il vincolo ck_partita_set
+    private void scriviSet(Partita partita, List<RegoleRisultatoPartita.SetInserito> set) {
+        partita.setSet1Sq1(set.get(0).squadra1());
+        partita.setSet1Sq2(set.get(0).squadra2());
+        partita.setSet2Sq1(set.get(1).squadra1());
+        partita.setSet2Sq2(set.get(1).squadra2());
+        if (set.size() > 2) {
+            partita.setSet3Sq1(set.get(2).squadra1());
+            partita.setSet3Sq2(set.get(2).squadra2());
+        }
+    }
+
     // Pattern per findInvitabili: "contiene", senza distinzione tra maiuscole e minuscole.
     // Senza testo di ricerca diventa "%%", che corrisponde a tutti (nome e cognome non sono mai null).
     // %, _ e il carattere di escape scritti dall'utente vanno cercati come caratteri normali.
@@ -564,15 +699,11 @@ public class PartitaService {
     // Le azioni dipendono dal ruolo nella partita (creatore, altro partecipante, esterno),
     // dallo stato e dall'istante attuale rispetto all'inizio e alla fine effettivi
     private PartitaDTO.AzioniResponse calcolaAzioni(Partita partita, Partecipazione partecipazione, LocalDateTime adesso) {
-        boolean partecipante = partecipazione != null;
-        boolean confermata = partita.getStato() == StatoPartita.CONFERMATA;
-
         boolean puoInvitare = rifiutoInvito(partita, partecipazione, adesso).isEmpty();
         boolean puoEliminare = rifiutoEliminazione(partita, partecipazione, adesso).isEmpty();
         boolean puoUscire = rifiutoUscita(partita, partecipazione, adesso).isEmpty();
         boolean puoConfermare = rifiutoConferma(partita, partecipazione, adesso).isEmpty();
-        boolean puoRegistrareRisultato = partecipante && confermata
-                && RegoleTempoPartita.inFinestraRisultato(partita, adesso);
+        boolean puoRegistrareRisultato = rifiutoRisultato(partita, partecipazione, adesso).isEmpty();
 
         return new PartitaDTO.AzioniResponse(puoInvitare, puoEliminare, puoUscire, puoConfermare, puoRegistrareRisultato);
     }
@@ -590,8 +721,10 @@ public class PartitaService {
     }
 
     // Il creatore per primo, poi gli altri posti in ordine di id (@OrderBy su Partita.partecipazioni):
-    // l'ordinamento è stabile, quindi sposta solo il creatore
-    private PartitaDTO.DettaglioResponse toDettaglioResponse(Partita p, PartitaDTO.AzioniResponse azioni) {
+    // l'ordinamento è stabile, quindi sposta solo il creatore. delRichiedente è il suo posto, null
+    // per l'admin e per chi non gioca: serve a vedere il risultato dal suo punto di vista.
+    private PartitaDTO.DettaglioResponse toDettaglioResponse(Partita p, PartitaDTO.AzioniResponse azioni,
+                                                             Partecipazione delRichiedente) {
         String telefonoCreatore = p.getCreatore().getTelefono();
         List<PartitaDTO.PostoResponse> posti = p.getPartecipazioni().stream()
                 .sorted(Comparator.comparing((Partecipazione pa) -> !eDelCreatore(pa, telefonoCreatore)))
@@ -609,7 +742,8 @@ public class PartitaService {
                 p.getTipo().name(),
                 telefonoCreatore,
                 posti,
-                azioni
+                azioni,
+                toRisultatoResponse(p, delRichiedente)
         );
     }
 
@@ -620,10 +754,11 @@ public class PartitaService {
     private PartitaDTO.PostoResponse toPostoResponse(Partecipazione pa) {
         Utente u = pa.getUtente();
         if (pa.getTipo() == TipoPartecipazione.CAMPO || u == null) {
-            return new PartitaDTO.PostoResponse(pa.getTipo().name(), null, null, null, null, pa.getConfermata());
+            return new PartitaDTO.PostoResponse(pa.getId(), pa.getTipo().name(), null, null, null, null,
+                    pa.getConfermata(), pa.getSquadra());
         }
-        return new PartitaDTO.PostoResponse(pa.getTipo().name(), u.getTelefono(), u.getNome(), u.getCognome(),
-                u.getLivello(), pa.getConfermata());
+        return new PartitaDTO.PostoResponse(pa.getId(), pa.getTipo().name(), u.getTelefono(), u.getNome(),
+                u.getCognome(), u.getLivello(), pa.getConfermata(), pa.getSquadra());
     }
 
     private PartitaDTO.StoricoResponse toStoricoResponse(Partecipazione pa) {
@@ -637,14 +772,14 @@ public class PartitaService {
                 p.getOraFine(),
                 p.getStato().name().toLowerCase(Locale.ROOT),
                 p.getTipo().name(),
-                toRisultatoResponse(pa)
+                toRisultatoResponse(p, pa)
         );
     }
 
     // null finché il risultato non è registrato. Il vincitore lo stabilisce RegoleRisultatoPartita;
     // l'esito resta null se l'utente non ha una squadra o se i set non indicano un vincitore.
-    private PartitaDTO.RisultatoResponse toRisultatoResponse(Partecipazione pa) {
-        Partita p = pa.getPartita();
+    // pa è il posto di chi guarda, null per l'admin e per chi non gioca, che non hanno né squadra né punti.
+    private PartitaDTO.RisultatoResponse toRisultatoResponse(Partita p, Partecipazione pa) {
         if (!RegoleRisultatoPartita.risultatoRegistrato(p)) {
             return null;
         }
@@ -653,13 +788,13 @@ public class PartitaService {
                 .map(s -> new PartitaDTO.SetResponse(s.squadra1(), s.squadra2()))
                 .toList();
 
-        Integer squadraUtente = pa.getSquadra();
+        Integer squadraUtente = pa != null ? pa.getSquadra() : null;
         Integer vincitrice = RegoleRisultatoPartita.squadraVincitrice(setGiocati);
         String esito = null;
         if (squadraUtente != null && vincitrice != null) {
             esito = squadraUtente.equals(vincitrice) ? ESITO_VINTA : ESITO_PERSA;
         }
-        return new PartitaDTO.RisultatoResponse(set, squadraUtente, esito, pa.getPuntiAssegnati());
+        return new PartitaDTO.RisultatoResponse(set, squadraUtente, esito, pa != null ? pa.getPuntiAssegnati() : null);
     }
 
     private PartitaDTO.InvitoRicevutoResponse toInvitoRicevutoResponse(Partita p) {

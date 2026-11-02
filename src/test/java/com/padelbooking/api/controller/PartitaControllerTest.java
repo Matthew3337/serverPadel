@@ -5,12 +5,14 @@ import com.padelbooking.api.dto.PartitaDTO;
 import com.padelbooking.api.exception.AccessoNegatoException;
 import com.padelbooking.api.exception.BusinessRuleException;
 import com.padelbooking.api.exception.ResourceNotFoundException;
+import com.padelbooking.api.exception.RichiestaNonValidaException;
 import com.padelbooking.api.model.Utente;
 import com.padelbooking.api.security.JwtUtil;
 import com.padelbooking.api.security.UtenteDetailsService;
 import com.padelbooking.api.security.UtentePrincipal;
 import com.padelbooking.api.service.PartitaService;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -22,6 +24,8 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
@@ -66,9 +70,9 @@ class PartitaControllerTest {
         PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
                 7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
                 "creata", "PUBBLICA", TEL_1,
-                List.of(new PartitaDTO.PostoResponse("UTENTE", TEL_1, "Mario", "Rossi", 2.5, false),
-                        new PartitaDTO.PostoResponse("CAMPO", null, null, null, null, false)),
-                new PartitaDTO.AzioniResponse(true, true, false, false, false));
+                List.of(new PartitaDTO.PostoResponse(11, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, false, null),
+                        new PartitaDTO.PostoResponse(12, "CAMPO", null, null, null, null, false, null)),
+                new PartitaDTO.AzioniResponse(true, true, false, false, false), null);
         when(partitaService.getDettaglio(7, TEL_1, false)).thenReturn(r);
 
         mockMvc.perform(get("/api/partite/7").with(user(principal(TEL_1, false))))
@@ -85,6 +89,10 @@ class PartitaControllerTest {
                 .andExpect(jsonPath("$.posti[0].tipo").value("UTENTE"))
                 .andExpect(jsonPath("$.posti[0].livello").value(2.5))
                 .andExpect(jsonPath("$.posti[0].confermata").value(false))
+                .andExpect(jsonPath("$.posti[0].idPosto").value(11))
+                .andExpect(jsonPath("$.posti[0].squadra").value(nullValue()))
+                .andExpect(jsonPath("$.risultato").value(nullValue()))
+                .andExpect(jsonPath("$.posti[1].idPosto").value(12))
                 .andExpect(jsonPath("$.posti[1].tipo").value("CAMPO"))
                 .andExpect(jsonPath("$.posti[1].telefono").value(nullValue()))
                 .andExpect(jsonPath("$.azioni.puoInvitare").value(true))
@@ -257,9 +265,9 @@ class PartitaControllerTest {
         PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
                 7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
                 "creata", "PUBBLICA", "3330000009",
-                List.of(new PartitaDTO.PostoResponse("UTENTE", "3330000009", "Anna", "Bianchi", 2.0, false),
-                        new PartitaDTO.PostoResponse("UTENTE", TEL_1, "Nome", "Cognome", 1.0, false)),
-                new PartitaDTO.AzioniResponse(false, false, true, false, false));
+                List.of(new PartitaDTO.PostoResponse(13, "UTENTE", "3330000009", "Anna", "Bianchi", 2.0, false, null),
+                        new PartitaDTO.PostoResponse(14, "UTENTE", TEL_1, "Nome", "Cognome", 1.0, false, null)),
+                new PartitaDTO.AzioniResponse(false, false, true, false, false), null);
         when(partitaService.entra(7, TEL_1, false)).thenReturn(r);
 
         mockMvc.perform(post("/api/partite/7/entra").with(user(principal(TEL_1, false))))
@@ -443,9 +451,9 @@ class PartitaControllerTest {
         PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
                 7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
                 "confermata", "PRIVATA", TEL_1,
-                List.of(new PartitaDTO.PostoResponse("UTENTE", TEL_1, "Mario", "Rossi", 2.5, true),
-                        new PartitaDTO.PostoResponse("CAMPO", null, null, null, null, false)),
-                new PartitaDTO.AzioniResponse(false, false, false, false, false));
+                List.of(new PartitaDTO.PostoResponse(15, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, true, null),
+                        new PartitaDTO.PostoResponse(16, "CAMPO", null, null, null, null, false, null)),
+                new PartitaDTO.AzioniResponse(false, false, false, false, false), null);
         when(partitaService.conferma(7, TEL_1, false)).thenReturn(r);
 
         mockMvc.perform(post("/api/partite/7/conferma").with(user(principal(TEL_1, false))))
@@ -569,9 +577,9 @@ class PartitaControllerTest {
         PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
                 7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
                 "creata", "PRIVATA", TEL_1,
-                List.of(new PartitaDTO.PostoResponse("UTENTE", TEL_1, "Nome", "Cognome", 1.0, false),
-                        new PartitaDTO.PostoResponse("UTENTE", "3330000002", "Luigi", "Rossi", 3.5, false)),
-                new PartitaDTO.AzioniResponse(true, true, false, false, false));
+                List.of(new PartitaDTO.PostoResponse(17, "UTENTE", TEL_1, "Nome", "Cognome", 1.0, false, null),
+                        new PartitaDTO.PostoResponse(18, "UTENTE", "3330000002", "Luigi", "Rossi", 3.5, false, null)),
+                new PartitaDTO.AzioniResponse(true, true, false, false, false), null);
         when(partitaService.invita(7, "3330000002", TEL_1, false)).thenReturn(r);
 
         mockMvc.perform(post("/api/partite/7/inviti").with(user(principal(TEL_1, false)))
@@ -702,6 +710,193 @@ class PartitaControllerTest {
         mockMvc.perform(get("/api/partite/inviti")).andExpect(status().isForbidden());
 
         verify(partitaService, never()).getBachecaInviti(anyString(), anyBoolean());
+    }
+
+    // ============================================
+    // Registrazione del risultato
+    // ============================================
+
+    private static final String BODY_RISULTATO = """
+            { "squadra1": [11, 13], "squadra2": [12, 14],
+              "set": [ { "squadra1": 6, "squadra2": 4 }, { "squadra1": 3, "squadra2": 6 }, { "squadra1": 6, "squadra2": 2 } ] }
+            """;
+
+    @Test
+    void registraRisultato200ConDettaglioEBodyPassatoAlService() throws Exception {
+        PartitaDTO.RisultatoResponse risultato = new PartitaDTO.RisultatoResponse(
+                List.of(new PartitaDTO.SetResponse(6, 4), new PartitaDTO.SetResponse(3, 6), new PartitaDTO.SetResponse(6, 2)),
+                1, "VINTA", null);
+        PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
+                7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
+                "giocata", "PRIVATA", TEL_1,
+                List.of(new PartitaDTO.PostoResponse(11, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, true, 1),
+                        new PartitaDTO.PostoResponse(14, "CAMPO", null, null, null, null, false, 2)),
+                new PartitaDTO.AzioniResponse(false, false, false, false, false), risultato);
+        ArgumentCaptor<PartitaDTO.RisultatoRequest> body = ArgumentCaptor.forClass(PartitaDTO.RisultatoRequest.class);
+        when(partitaService.registraRisultato(eq(7), body.capture(), eq(TEL_1), eq(false))).thenReturn(r);
+
+        mockMvc.perform(post("/api/partite/7/risultato").with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY_RISULTATO))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.stato").value("giocata"))
+                .andExpect(jsonPath("$.posti[0].idPosto").value(11))
+                .andExpect(jsonPath("$.posti[0].squadra").value(1))
+                .andExpect(jsonPath("$.posti[1].idPosto").value(14))
+                .andExpect(jsonPath("$.posti[1].squadra").value(2))
+                .andExpect(jsonPath("$.azioni.puoRegistrareRisultato").value(false))
+                .andExpect(jsonPath("$.risultato.set.length()").value(3))
+                .andExpect(jsonPath("$.risultato.set[1].squadra1").value(3))
+                .andExpect(jsonPath("$.risultato.set[1].squadra2").value(6))
+                .andExpect(jsonPath("$.risultato.squadraUtente").value(1))
+                .andExpect(jsonPath("$.risultato.esito").value("VINTA"))
+                .andExpect(jsonPath("$.risultato.puntiAssegnati").value(nullValue()))
+                .andExpect(jsonPath("$.risultato.length()").value(4));
+
+        assertThat(body.getValue().getSquadra1()).containsExactly(11, 13);
+        assertThat(body.getValue().getSquadra2()).containsExactly(12, 14);
+        assertThat(body.getValue().getSet()).hasSize(3);
+        assertThat(body.getValue().getSet().get(2).getSquadra1()).isEqualTo(6);
+        assertThat(body.getValue().getSet().get(2).getSquadra2()).isEqualTo(2);
+    }
+
+    @Test
+    void registraRisultatoPassaIlFlagAdminAlService() throws Exception {
+        when(partitaService.registraRisultato(eq(7), any(), eq(TEL_1), eq(true)))
+                .thenThrow(new AccessoNegatoException("L'amministratore modifica i risultati dalla propria area"));
+
+        mockMvc.perform(post("/api/partite/7/risultato").with(user(principal(TEL_1, true)))
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY_RISULTATO))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.errore").value("L'amministratore modifica i risultati dalla propria area"))
+                .andExpect(jsonPath("$.timestamp", notNullValue()))
+                .andExpect(jsonPath("$.length()").value(3));
+    }
+
+    @Test
+    void registraRisultatoRichiestaNonValidaDa400ConIlFormatoDegliErrori() throws Exception {
+        when(partitaService.registraRisultato(eq(7), any(), eq(TEL_1), eq(false)))
+                .thenThrow(new RichiestaNonValidaException("Ogni squadra deve avere 2 giocatori"));
+
+        mockMvc.perform(post("/api/partite/7/risultato").with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY_RISULTATO))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                // Il messaggio è quello del contratto, senza il prefisso del campo della validazione
+                .andExpect(jsonPath("$.errore").value("Ogni squadra deve avere 2 giocatori"))
+                .andExpect(jsonPath("$.timestamp", notNullValue()))
+                .andExpect(jsonPath("$.length()").value(3));
+    }
+
+    @Test
+    void registraRisultatoCampiMancantiArrivanoAlServiceCheLiGiudica() throws Exception {
+        // Niente @Valid: un body vuoto non si ferma al controller, così una partita non visibile dà comunque 404
+        when(partitaService.registraRisultato(eq(7), any(), eq(TEL_1), eq(false)))
+                .thenThrow(new ResourceNotFoundException("Partita non trovata con id 7"));
+
+        mockMvc.perform(post("/api/partite/7/risultato").with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.errore").value("Partita non trovata con id 7"));
+    }
+
+    @Test
+    void registraRisultatoRegolaViolataDa409() throws Exception {
+        when(partitaService.registraRisultato(eq(7), any(), eq(TEL_1), eq(false)))
+                .thenThrow(new BusinessRuleException("Il risultato è già stato registrato"));
+
+        mockMvc.perform(post("/api/partite/7/risultato").with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY_RISULTATO))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.errore").value("Il risultato è già stato registrato"))
+                .andExpect(jsonPath("$.length()").value(3));
+    }
+
+    @Test
+    void registraRisultatoJsonNonValidoDa400SenzaChiamareIlService() throws Exception {
+        mockMvc.perform(post("/api/partite/7/risultato").with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON).content("{ \"squadra1\": [11, "))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.errore", notNullValue()));
+
+        verify(partitaService, never()).registraRisultato(anyInt(), any(), anyString(), anyBoolean());
+    }
+
+    // spring.jackson.deserialization.accept-float-as-int=false: senza, Jackson troncherebbe 6.5 a 6 e
+    // registrerebbe un risultato diverso da quello inviato. Vale anche per 6.0: un game è un intero.
+    @Test
+    void registraRisultatoGameConDecimaliDa400SenzaChiamareIlService() throws Exception {
+        for (String game : List.of("6.5", "6.0")) {
+            String body = """
+                    { "squadra1": [11, 13], "squadra2": [12, 14],
+                      "set": [ { "squadra1": %s, "squadra2": 4 }, { "squadra1": 6, "squadra2": 3 } ] }
+                    """.formatted(game);
+
+            mockMvc.perform(post("/api/partite/7/risultato").with(user(principal(TEL_1, false)))
+                            .contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.errore", containsString("set.[0].squadra1")))
+                    .andExpect(jsonPath("$.timestamp", notNullValue()))
+                    .andExpect(jsonPath("$.length()").value(3));
+        }
+
+        verify(partitaService, never()).registraRisultato(anyInt(), any(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void registraRisultatoIdPostoConDecimaliDa400SenzaChiamareIlService() throws Exception {
+        String body = """
+                { "squadra1": [11.5, 13], "squadra2": [12, 14],
+                  "set": [ { "squadra1": 6, "squadra2": 4 }, { "squadra1": 6, "squadra2": 3 } ] }
+                """;
+
+        mockMvc.perform(post("/api/partite/7/risultato").with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.errore", containsString("squadra1")));
+
+        verify(partitaService, never()).registraRisultato(anyInt(), any(), anyString(), anyBoolean());
+    }
+
+    // Senza @Valid il controller non filtra i dati: i body che Jackson non riesce a leggere devono
+    // comunque dare 400 nel formato degli errori, e non 500
+    @Test
+    void registraRisultatoBodyNonLeggibileDa400ENon500() throws Exception {
+        List<String> bodyNonLeggibili = List.of(
+                "",
+                "null",
+                "[]",
+                "{ \"squadra1\": 11, \"squadra2\": [12, 14], \"set\": [] }",
+                "{ \"squadra1\": [\"abc\", 13], \"squadra2\": [12, 14], \"set\": [] }",
+                "{ \"squadra1\": [11, 13], \"squadra2\": [12, 14], \"set\": { \"squadra1\": 6 } }",
+                "{ \"squadra1\": [11, 13], \"squadra2\": [12, 14], \"set\": [ { \"squadra1\": \"sei\", \"squadra2\": 4 } ] }",
+                "{ \"squadra1\": [11, 13], \"squadra2\": [12, 14], \"set\": [ { \"squadra1\": 99999999999, \"squadra2\": 4 } ] }");
+
+        for (String body : bodyNonLeggibili) {
+            mockMvc.perform(post("/api/partite/7/risultato").with(user(principal(TEL_1, false)))
+                            .contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.errore", notNullValue()))
+                    .andExpect(jsonPath("$.timestamp", notNullValue()))
+                    .andExpect(jsonPath("$.length()").value(3));
+        }
+
+        verify(partitaService, never()).registraRisultato(anyInt(), any(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void registraRisultatoSenzaAutenticazioneRifiutato() throws Exception {
+        mockMvc.perform(post("/api/partite/7/risultato")
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY_RISULTATO))
+                .andExpect(status().isForbidden());
+
+        verify(partitaService, never()).registraRisultato(anyInt(), any(), anyString(), anyBoolean());
     }
 
     private static UtentePrincipal principal(String telefono, boolean admin) {

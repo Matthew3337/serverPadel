@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-// Operazioni sulla singola partita: dettaglio, bacheche, storico, inviti e azioni dei partecipanti (ingresso, uscita, conferma)
+// Operazioni sulla singola partita: dettaglio, bacheche, storico, inviti e azioni dei partecipanti (ingresso, uscita, conferma, risultato)
 @RestController
 @RequestMapping("/api/partite")
 public class PartitaController {
@@ -96,6 +96,17 @@ public class PartitaController {
                                                                  @AuthenticationPrincipal UtentePrincipal principal) {
         boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
         return ResponseEntity.ok(partitaService.conferma(id, principal.getTelefono(), isAdmin));
+    }
+
+    // Registrazione del risultato da parte di un partecipante: restituisce il dettaglio già aggiornato.
+    // Niente @Valid: i dati li controlla il service (vedi PartitaDTO.RisultatoRequest)
+    // POST /api/partite/7/risultato  { "squadra1": [11, 12], "squadra2": [13, 14], "set": [ { "squadra1": 6, "squadra2": 4 }, ... ] }
+    @PostMapping("/{id}/risultato")
+    public ResponseEntity<PartitaDTO.DettaglioResponse> registraRisultato(@PathVariable Integer id,
+                                                                          @RequestBody PartitaDTO.RisultatoRequest request,
+                                                                          @AuthenticationPrincipal UtentePrincipal principal) {
+        boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
+        return ResponseEntity.ok(partitaService.registraRisultato(id, request, principal.getTelefono(), isAdmin));
     }
 
     // Utenti che il creatore può invitare, filtrati facoltativamente per nome o cognome

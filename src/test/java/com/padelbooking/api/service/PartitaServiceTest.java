@@ -4,6 +4,7 @@ import com.padelbooking.api.dto.PartitaDTO;
 import com.padelbooking.api.exception.AccessoNegatoException;
 import com.padelbooking.api.exception.BusinessRuleException;
 import com.padelbooking.api.exception.ResourceNotFoundException;
+import com.padelbooking.api.exception.RichiestaNonValidaException;
 import com.padelbooking.api.model.Campo;
 import com.padelbooking.api.model.Partecipazione;
 import com.padelbooking.api.model.Partita;
@@ -27,6 +28,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
@@ -49,6 +51,8 @@ class PartitaServiceTest {
     private static final ZoneId ZONA = ZoneId.of("Europe/Rome");
     // "Adesso" fisso per tutti i test
     private static final LocalDateTime ADESSO = LocalDateTime.of(2026, 11, 1, 12, 0);
+    // Una fine che cade esattamente adesso: la partita è appena registrabile
+    private static final LocalDateTime FINE_APPENA_RAGGIUNTA = ADESSO;
 
     @Mock
     private PartitaRepository partitaRepository;
@@ -1933,6 +1937,566 @@ class PartitaServiceTest {
             lenient().when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.of(
                     new Utente(TEL_ESTRANEO, "Anna", "Bianchi", "x", LocalDate.of(1990, 1, 1), false, 2.5)));
         }
+    }
+
+    // ============================================
+    // Registrazione del risultato
+    // ============================================
+    @Nested
+    class RegistrazioneRisultato {
+
+        private static final String NUMERO_SET = "Il risultato deve avere 2 o 3 set e una squadra deve vincerne esattamente 2";
+        private static final String SOLO_CONFERMATE = "Il risultato si può registrare solo per le partite confermate";
+        private static final String NON_FINITA = "La partita non è ancora finita";
+        private static final String SCADUTO = "Il termine per registrare il risultato è scaduto";
+        private static final String GIA_REGISTRATO = "Il risultato è già stato registrato";
+        private static final String NON_PARTECIPI = "Non partecipi a questa partita";
+        private static final String SQUADRE_POSTI = "Le squadre devono contenere i 4 posti della partita";
+        private static final String GIOCATORI_PER_SQUADRA = "Ogni squadra deve avere 2 giocatori";
+
+        // ------ Regole di accesso ------
+
+        @Test
+        void adminRiceve403SenzaLeggereLaPartita() {
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_CREATORE, true))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("L'amministratore modifica i risultati dalla propria area");
+            verifyNoInteractions(partitaRepository);
+        }
+
+        @Test
+        void inesistenteDa404() {
+            when(partitaRepository.findByIdPerAggiornamento(7)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_CREATORE, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void privataNonVisibileAEstraneoDa404AncheConBodyNonValido() {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            p.setTipo(TipoPartita.PRIVATA);
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.registraRisultato(7, new PartitaDTO.RisultatoRequest(), TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void estraneoSuPubblicaVisibileNonPartecipa() {
+            stubLock(daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA));
+            stubEstraneo(2.5);
+
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_ESTRANEO, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(NON_PARTECIPI);
+        }
+
+        @Test
+        void usaIlLockInScrittura() {
+            stubLock(daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA));
+
+            service.registraRisultato(7, duePerDue(), TEL_CREATORE, false);
+
+            verify(partitaRepository).findByIdPerAggiornamento(7);
+            verify(partitaRepository, never()).findById(any());
+        }
+
+        // ------ Stato della partita ------
+
+        @Test
+        void giocataDa409GiaRegistrato() {
+            stubLock(daRegistrare(StatoPartita.GIOCATA, FINE_APPENA_RAGGIUNTA));
+
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(GIA_REGISTRATO);
+        }
+
+        @Test
+        void confermataConSetGiaPresentiDa409GiaRegistrato() {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            p.setSet1Sq1(6);
+            p.setSet1Sq2(0);
+            p.setSet2Sq1(6);
+            p.setSet2Sq2(0);
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(GIA_REGISTRATO);
+            assertThat(p.getSet1Sq2()).isZero();
+        }
+
+        @Test
+        void secondaRegistrazioneDa409ENonSovrascriveLaPrima() {
+            // Con il lock la seconda richiesta legge la partita lasciata dalla prima
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            stubLock(p);
+            service.registraRisultato(7, duePerDue(), TEL_CREATORE, false);
+
+            PartitaDTO.RisultatoRequest altra = new PartitaDTO.RisultatoRequest(List.of(2, 3), List.of(1, 4),
+                    List.of(new PartitaDTO.SetRequest(0, 6), new PartitaDTO.SetRequest(0, 6)));
+            assertThatThrownBy(() -> service.registraRisultato(7, altra, TEL_2, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(GIA_REGISTRATO);
+
+            assertThat(p.getRegistrante()).isSameAs(creatore);
+            assertThat(p.getSet1Sq1()).isEqualTo(6);
+            assertThat(p.getPartecipazioni().get(0).getSquadra()).isEqualTo(1);
+        }
+
+        @Test
+        void creataDa409SoloConfermate() {
+            stubLock(daRegistrare(StatoPartita.CREATA, FINE_APPENA_RAGGIUNTA));
+
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(SOLO_CONFERMATE);
+        }
+
+        @Test
+        void annullataDa409SoloConfermatePerChiPartecipa() {
+            stubLock(daRegistrare(StatoPartita.ANNULLATA, FINE_APPENA_RAGGIUNTA));
+
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(SOLO_CONFERMATE);
+        }
+
+        @Test
+        void iRifiutiSulContestoVengonoPrimaDellaValidazioneDelBody() {
+            stubLock(daRegistrare(StatoPartita.CONFERMATA, ADESSO.plusHours(1)));
+
+            assertThatThrownBy(() -> service.registraRisultato(7, new PartitaDTO.RisultatoRequest(), TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(NON_FINITA);
+        }
+
+        // ------ Limiti della finestra [fine, fine + 24 h] ------
+
+        @Test
+        void unSecondoPrimaDellaFineNonEAncoraFinita() {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, ADESSO.plusSeconds(1));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(NON_FINITA);
+            assertNienteScritto(p);
+        }
+
+        @Test
+        void esattamenteAllaFineLaFinestraEAperta() {
+            stubLock(daRegistrare(StatoPartita.CONFERMATA, ADESSO));
+
+            assertThat(service.registraRisultato(7, duePerDue(), TEL_CREATORE, false).getStato()).isEqualTo("giocata");
+        }
+
+        @Test
+        void esattamente24OreDopoLaFineLaFinestraEAncoraAperta() {
+            stubLock(daRegistrare(StatoPartita.CONFERMATA, ADESSO.minusHours(24)));
+
+            assertThat(service.registraRisultato(7, duePerDue(), TEL_CREATORE, false).getStato()).isEqualTo("giocata");
+        }
+
+        @Test
+        void unSecondoOltreLe24OreIlTermineEScaduto() {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, ADESSO.minusHours(24).minusSeconds(1));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(SCADUTO);
+            assertNienteScritto(p);
+        }
+
+        @Test
+        void partitaDopoMezzanotteUsaLaFineEffettiva() {
+            // Serata del 31/10, 00:30-02:00: finisce l'1/11 alle 02:00, quindi adesso (12:00) è in finestra.
+            // Con la sola data_partita la fine sarebbe il 31/10 alle 02:00 e il termine risulterebbe scaduto
+            stubLock(dopoMezzanotte(LocalDate.of(2026, 10, 31)));
+
+            assertThat(service.registraRisultato(7, duePerDue(), TEL_CREATORE, false).getStato()).isEqualTo("giocata");
+        }
+
+        @Test
+        void partitaDopoMezzanotteDellaSerataDiOggiNonEAncoraFinita() {
+            // Serata dell'1/11, 00:30-02:00: si gioca il 2/11, anche se data e ora di fine sono già passate
+            stubLock(dopoMezzanotte(LocalDate.of(2026, 11, 1)));
+
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(NON_FINITA);
+        }
+
+        // ------ Squadre ------
+
+        @Test
+        void squadreMancantiOConNumeroSbagliato() {
+            List<List<List<Integer>>> casi = List.of(
+                    List.of(List.of(1), List.of(2, 3, 4)),
+                    List.of(List.of(1, 2, 3), List.of(4)),
+                    List.of(List.of(), List.of(1, 2)),
+                    List.of(List.of(1, 2, 3, 4), List.of()));
+            for (List<List<Integer>> caso : casi) {
+                assertRichiestaNonValida(new PartitaDTO.RisultatoRequest(caso.get(0), caso.get(1), dueSet()),
+                        GIOCATORI_PER_SQUADRA);
+            }
+            assertRichiestaNonValida(new PartitaDTO.RisultatoRequest(null, List.of(2, 4), dueSet()), GIOCATORI_PER_SQUADRA);
+            assertRichiestaNonValida(new PartitaDTO.RisultatoRequest(List.of(1, 3), null, dueSet()), GIOCATORI_PER_SQUADRA);
+        }
+
+        @Test
+        void squadreConIdRipetutiONonDellaPartita() {
+            assertRichiestaNonValida(new PartitaDTO.RisultatoRequest(List.of(1, 1), List.of(2, 3), dueSet()), SQUADRE_POSTI);
+            // Lo stesso posto in entrambe le squadre
+            assertRichiestaNonValida(new PartitaDTO.RisultatoRequest(List.of(1, 2), List.of(2, 3), dueSet()), SQUADRE_POSTI);
+            assertRichiestaNonValida(new PartitaDTO.RisultatoRequest(List.of(1, 3), List.of(2, 99), dueSet()), SQUADRE_POSTI);
+            assertRichiestaNonValida(new PartitaDTO.RisultatoRequest(Arrays.asList(1, null), List.of(2, 4), dueSet()), SQUADRE_POSTI);
+        }
+
+        @Test
+        void partitaConfermataConMenoDi4PostiNonPassaLaValidazione() {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            p.rimuoviPartecipazione(p.getPartecipazioni().get(3));
+            stubLock(p);
+
+            PartitaDTO.RisultatoRequest ripetuto = new PartitaDTO.RisultatoRequest(List.of(1, 2), List.of(3, 3), dueSet());
+            assertThatThrownBy(() -> service.registraRisultato(7, ripetuto, TEL_CREATORE, false))
+                    .isInstanceOf(RichiestaNonValidaException.class)
+                    .hasMessage(SQUADRE_POSTI);
+            assertNienteScritto(p);
+        }
+
+        // ------ Set: i casi dettagliati stanno in RegoleRisultatoPartitaTest ------
+
+        @Test
+        void setNonValidoIndicaQualeSet() {
+            assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(6, 4), new PartitaDTO.SetRequest(7, 5)),
+                    "Il set 2 non è valido: i game vanno da 0 a 6 e il set non può finire in parità");
+            assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(3, 3), new PartitaDTO.SetRequest(6, 4)),
+                    "Il set 1 non è valido: i game vanno da 0 a 6 e il set non può finire in parità");
+            // Un elemento null nella lista, o un game mancante, non devono diventare un 500
+            assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(6, 4), null),
+                    "Il set 2 non è valido: i game vanno da 0 a 6 e il set non può finire in parità");
+            assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(6, null), new PartitaDTO.SetRequest(6, 4)),
+                    "Il set 1 non è valido: i game vanno da 0 a 6 e il set non può finire in parità");
+        }
+
+        @Test
+        void numeroDiSetEVincitore() {
+            assertRichiestaNonValida(new PartitaDTO.RisultatoRequest(List.of(1, 3), List.of(2, 4), null), NUMERO_SET);
+            assertRichiestaNonValida(conSet(), NUMERO_SET);
+            assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(6, 4)), NUMERO_SET);
+            assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(6, 4), new PartitaDTO.SetRequest(4, 6)), NUMERO_SET);
+        }
+
+        @Test
+        void terzoSetDiTroppo() {
+            assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(6, 4), new PartitaDTO.SetRequest(6, 3),
+                            new PartitaDTO.SetRequest(2, 6)),
+                    "Il terzo set non va inserito se una squadra ha vinto i primi due");
+        }
+
+        // ------ Effetto ------
+
+        @Test
+        void dueSetLascianoNullIlTerzoESalvanoTutto() {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            stubLock(p);
+
+            PartitaDTO.DettaglioResponse r = service.registraRisultato(7, duePerDue(), TEL_2, false);
+
+            assertThat(p.getSet1Sq1()).isEqualTo(6);
+            assertThat(p.getSet1Sq2()).isEqualTo(4);
+            assertThat(p.getSet2Sq1()).isEqualTo(6);
+            assertThat(p.getSet2Sq2()).isEqualTo(3);
+            // ck_partita_set: con 2 set entrambe le colonne del terzo restano NULL
+            assertThat(p.getSet3Sq1()).isNull();
+            assertThat(p.getSet3Sq2()).isNull();
+            assertThat(p.getRegistrante()).isSameAs(secondo);
+            assertThat(p.getDataRisultato()).isEqualTo(ADESSO);
+            assertThat(p.getStato()).isEqualTo(StatoPartita.GIOCATA);
+
+            assertThat(r.getStato()).isEqualTo("giocata");
+            assertThat(r.getRisultato().getSet()).hasSize(2);
+            assertThat(r.getRisultato().getSquadraUtente()).isEqualTo(2);
+            assertThat(r.getRisultato().getEsito()).isEqualTo("PERSA");
+            assertThat(r.getRisultato().getPuntiAssegnati()).isNull();
+            assertTutteFalse(r.getAzioni());
+        }
+
+        @Test
+        void treSetSalvanoTuttiIGame() {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            stubLock(p);
+
+            PartitaDTO.DettaglioResponse r = service.registraRisultato(7, conSet(new PartitaDTO.SetRequest(6, 4),
+                    new PartitaDTO.SetRequest(3, 6), new PartitaDTO.SetRequest(2, 6)), TEL_CREATORE, false);
+
+            assertThat(p.getSet1Sq1()).isEqualTo(6);
+            assertThat(p.getSet1Sq2()).isEqualTo(4);
+            assertThat(p.getSet2Sq1()).isEqualTo(3);
+            assertThat(p.getSet2Sq2()).isEqualTo(6);
+            assertThat(p.getSet3Sq1()).isEqualTo(2);
+            assertThat(p.getSet3Sq2()).isEqualTo(6);
+            assertThat(r.getRisultato().getSet()).hasSize(3);
+            assertThat(r.getRisultato().getSquadraUtente()).isEqualTo(1);
+            assertThat(r.getRisultato().getEsito()).isEqualTo("PERSA");
+        }
+
+        @Test
+        void giocatoriCampoEntranoNelleSquadre() {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            stubLock(p);
+
+            // Posti 1 e 2 utenti, 3 e 4 campo: i due utenti giocano insieme contro i due giocatori del campo
+            PartitaDTO.DettaglioResponse r = service.registraRisultato(7,
+                    new PartitaDTO.RisultatoRequest(List.of(3, 4), List.of(1, 2), dueSet()), TEL_CREATORE, false);
+
+            assertThat(p.getPartecipazioni()).extracting(Partecipazione::getSquadra).containsExactly(2, 2, 1, 1);
+            assertThat(r.getPosti()).extracting(PartitaDTO.PostoResponse::getIdPosto).containsExactly(1, 2, 3, 4);
+            assertThat(r.getPosti()).extracting(PartitaDTO.PostoResponse::getSquadra).containsExactly(2, 2, 1, 1);
+            assertThat(r.getPosti()).extracting(PartitaDTO.PostoResponse::getTipo)
+                    .containsExactly("UTENTE", "UTENTE", "CAMPO", "CAMPO");
+        }
+
+        @Test
+        void unRifiutoSulBodyNonScriveNiente() {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.registraRisultato(7,
+                    conSet(new PartitaDTO.SetRequest(6, 4), new PartitaDTO.SetRequest(4, 6)), TEL_CREATORE, false))
+                    .isInstanceOf(RichiestaNonValidaException.class);
+            assertNienteScritto(p);
+        }
+
+        private void assertRichiestaNonValida(PartitaDTO.RisultatoRequest request, String messaggio) {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.registraRisultato(7, request, TEL_CREATORE, false))
+                    .isInstanceOf(RichiestaNonValidaException.class)
+                    .hasMessage(messaggio);
+            assertNienteScritto(p);
+        }
+
+        private void assertNienteScritto(Partita p) {
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CONFERMATA);
+            assertThat(p.getSet1Sq1()).isNull();
+            assertThat(p.getRegistrante()).isNull();
+            assertThat(p.getDataRisultato()).isNull();
+            assertThat(p.getPartecipazioni()).extracting(Partecipazione::getSquadra).containsOnlyNulls();
+        }
+
+        private PartitaDTO.RisultatoRequest conSet(PartitaDTO.SetRequest... set) {
+            return new PartitaDTO.RisultatoRequest(List.of(1, 3), List.of(2, 4), Arrays.asList(set));
+        }
+
+        // Campo aperto dalle 18 alle 02: lo slot delle 00:30 appartiene alla parte dopo mezzanotte
+        private Partita dopoMezzanotte(LocalDate serata) {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            p.setCampo(new Campo(2, "Campo 2", true, LocalTime.of(18, 0), LocalTime.of(2, 0)));
+            p.setDataPartita(serata);
+            p.setOraInizio(LocalTime.of(0, 30));
+            p.setOraFine(LocalTime.of(2, 0));
+            return p;
+        }
+    }
+
+    // ============================================
+    // Coerenza tra puoRegistrareRisultato e registraRisultato
+    // ============================================
+    @Nested
+    class CoerenzaRisultato {
+
+        @Test
+        void puoRegistrareRisultatoCoincideConRegistraRisultato() {
+            List<LocalDateTime> fini = List.of(ADESSO.plusSeconds(1), ADESSO, ADESSO.minusHours(24),
+                    ADESSO.minusHours(24).minusSeconds(1));
+            lenient().when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.of(
+                    new Utente(TEL_ESTRANEO, "Anna", "Bianchi", "x", LocalDate.of(1990, 1, 1), false, 2.5)));
+
+            int riuscite = 0;
+            for (StatoPartita stato : StatoPartita.values()) {
+                for (LocalDateTime fine : fini) {
+                    for (String telefono : List.of(TEL_CREATORE, TEL_2, TEL_ESTRANEO)) {
+                        for (boolean conSet : List.of(false, true)) {
+                            stubPartita(scenario(stato, fine, conSet));
+                            boolean puo = puoRegistrare(telefono);
+
+                            stubLock(scenario(stato, fine, conSet));
+                            boolean riuscita = riesce(() -> service.registraRisultato(7, duePerDue(), telefono, false));
+
+                            assertThat(riuscita).as("%s, fine %s, %s, con set %s", stato, fine, telefono, conSet)
+                                    .isEqualTo(puo);
+                            riuscite += riuscita ? 1 : 0;
+                        }
+                    }
+                }
+            }
+            // Solo confermata, senza set, ai due estremi aperti della finestra, per i due utenti
+            assertThat(riuscite).isEqualTo(4);
+        }
+
+        private boolean puoRegistrare(String telefono) {
+            try {
+                return service.getDettaglio(7, telefono, false).getAzioni().getPuoRegistrareRisultato();
+            } catch (ResourceNotFoundException ex) {
+                return false;
+            }
+        }
+
+        private Partita scenario(StatoPartita stato, LocalDateTime fine, boolean conSet) {
+            Partita p = daRegistrare(stato, fine);
+            if (conSet) {
+                p.setSet1Sq1(6);
+                p.setSet1Sq2(4);
+                p.setSet2Sq1(6);
+                p.setSet2Sq2(3);
+            }
+            return p;
+        }
+
+        private boolean riesce(Runnable azione) {
+            try {
+                azione.run();
+                return true;
+            } catch (AccessoNegatoException | BusinessRuleException | ResourceNotFoundException ex) {
+                return false;
+            }
+        }
+    }
+
+    // ============================================
+    // Dettaglio con il risultato
+    // ============================================
+    @Nested
+    class DettaglioConRisultato {
+
+        @Test
+        void senzaRisultatoIlCampoENullEIPostiHannoIdESquadraNull() {
+            stubPartita(daRegistrare(StatoPartita.CONFERMATA, ADESSO.plusHours(2)));
+
+            PartitaDTO.DettaglioResponse r = service.getDettaglio(7, TEL_CREATORE, false);
+
+            assertThat(r.getRisultato()).isNull();
+            assertThat(r.getPosti()).extracting(PartitaDTO.PostoResponse::getIdPosto).containsExactly(1, 2, 3, 4);
+            assertThat(r.getPosti()).extracting(PartitaDTO.PostoResponse::getSquadra).containsOnlyNulls();
+        }
+
+        @Test
+        void vistoDalleDueSquadreCambiaEsitoESquadra() {
+            stubPartita(giocata());
+
+            PartitaDTO.RisultatoResponse delPrimo = service.getDettaglio(7, TEL_CREATORE, false).getRisultato();
+            PartitaDTO.RisultatoResponse delSecondo = service.getDettaglio(7, TEL_2, false).getRisultato();
+
+            assertThat(delPrimo.getSquadraUtente()).isEqualTo(1);
+            assertThat(delPrimo.getEsito()).isEqualTo("VINTA");
+            assertThat(delPrimo.getPuntiAssegnati()).isEqualTo(12);
+            assertThat(delSecondo.getSquadraUtente()).isEqualTo(2);
+            assertThat(delSecondo.getEsito()).isEqualTo("PERSA");
+            assertThat(delSecondo.getPuntiAssegnati()).isEqualTo(-8);
+
+            // I set restano sempre nell'ordine squadra 1 - squadra 2
+            for (PartitaDTO.RisultatoResponse r : List.of(delPrimo, delSecondo)) {
+                assertThat(r.getSet()).hasSize(3);
+                assertThat(r.getSet().get(1).getSquadra1()).isEqualTo(3);
+                assertThat(r.getSet().get(1).getSquadra2()).isEqualTo(6);
+            }
+        }
+
+        @Test
+        void perLAdminSquadraEdEsitoSonoNull() {
+            stubPartita(giocata());
+
+            PartitaDTO.DettaglioResponse r = service.getDettaglio(7, "3330000099", true);
+
+            assertThat(r.getRisultato().getSet()).hasSize(3);
+            assertThat(r.getRisultato().getSquadraUtente()).isNull();
+            assertThat(r.getRisultato().getEsito()).isNull();
+            assertThat(r.getRisultato().getPuntiAssegnati()).isNull();
+            assertTutteFalse(r.getAzioni());
+        }
+
+        @Test
+        void perLAdminConUnPostoNellaPartitaSquadraEdEsitoSonoComunqueNull() {
+            stubPartita(giocata());
+
+            PartitaDTO.RisultatoResponse r = service.getDettaglio(7, TEL_CREATORE, true).getRisultato();
+
+            assertThat(r.getSquadraUtente()).isNull();
+            assertThat(r.getEsito()).isNull();
+            assertThat(r.getPuntiAssegnati()).isNull();
+        }
+
+        @Test
+        void perChiNonGiocaSquadraEdEsitoSonoNull() {
+            stubPartita(giocata());
+            stubEstraneo(2.5);
+
+            PartitaDTO.RisultatoResponse r = service.getDettaglio(7, TEL_ESTRANEO, false).getRisultato();
+
+            assertThat(r.getSet()).hasSize(3);
+            assertThat(r.getSquadraUtente()).isNull();
+            assertThat(r.getEsito()).isNull();
+            assertThat(r.getPuntiAssegnati()).isNull();
+        }
+
+        @Test
+        void partecipanteSenzaSquadraHaSquadraEdEsitoNull() {
+            Partita p = giocata();
+            p.getPartecipazioni().get(0).setSquadra(null);
+            stubPartita(p);
+
+            PartitaDTO.RisultatoResponse r = service.getDettaglio(7, TEL_CREATORE, false).getRisultato();
+
+            assertThat(r.getSquadraUtente()).isNull();
+            assertThat(r.getEsito()).isNull();
+        }
+
+        // Finita 6-4 3-6 6-2: vince la squadra 1. Posti 1 e 3 in squadra 1, posti 2 e 4 in squadra 2
+        private Partita giocata() {
+            Partita p = daRegistrare(StatoPartita.GIOCATA, ADESSO.minusHours(2));
+            p.setSet1Sq1(6);
+            p.setSet1Sq2(4);
+            p.setSet2Sq1(3);
+            p.setSet2Sq2(6);
+            p.setSet3Sq1(6);
+            p.setSet3Sq2(2);
+            List<Partecipazione> posti = p.getPartecipazioni();
+            posti.get(0).setSquadra(1);
+            posti.get(0).setPuntiAssegnati(12);
+            posti.get(1).setSquadra(2);
+            posti.get(1).setPuntiAssegnati(-8);
+            posti.get(2).setSquadra(1);
+            posti.get(3).setSquadra(2);
+            return p;
+        }
+    }
+
+    // Pubblica con 4 posti: 1 creatore, 2 secondo utente, 3 e 4 giocatori campo. Il parametro è la fine,
+    // con la durata di 90 minuti di partita(...)
+    private Partita daRegistrare(StatoPartita stato, LocalDateTime fine) {
+        Partita p = partita(stato, TipoPartita.PUBBLICA, fine.minusMinutes(90));
+        aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, true));
+        aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+        aggiungi(p, 4, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+        return p;
+    }
+
+    // 6-4 6-3 con i posti 1 e 3 contro i posti 2 e 4
+    private static PartitaDTO.RisultatoRequest duePerDue() {
+        return new PartitaDTO.RisultatoRequest(List.of(1, 3), List.of(2, 4), dueSet());
+    }
+
+    private static List<PartitaDTO.SetRequest> dueSet() {
+        return List.of(new PartitaDTO.SetRequest(6, 4), new PartitaDTO.SetRequest(6, 3));
     }
 
     private void stubLock(Partita p) {
