@@ -35,6 +35,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -63,6 +64,9 @@ class PartitaServiceTest {
     @Mock
     private UtenteRepository utenteRepository;
 
+    @Mock
+    private PunteggiService punteggiService;
+
     private PartitaService service;
 
     private Campo campoDiurno;
@@ -72,7 +76,7 @@ class PartitaServiceTest {
     @BeforeEach
     void setUp() {
         Clock fisso = Clock.fixed(ADESSO.atZone(ZONA).toInstant(), ZONA);
-        service = new PartitaService(partitaRepository, partecipazioneRepository, utenteRepository, fisso);
+        service = new PartitaService(partitaRepository, partecipazioneRepository, utenteRepository, punteggiService, fisso);
         campoDiurno = new Campo(1, "Campo 1", true, LocalTime.of(8, 0), LocalTime.of(22, 0));
         creatore = new Utente(TEL_CREATORE, "Mario", "Rossi", "x", LocalDate.of(1990, 1, 1), false, 2.5);
         secondo = new Utente(TEL_2, "Luigi", "Verdi", "x", LocalDate.of(1990, 1, 1), false, 3.0);
@@ -2273,6 +2277,61 @@ class PartitaServiceTest {
                     conSet(new PartitaDTO.SetRequest(6, 4), new PartitaDTO.SetRequest(4, 6)), TEL_CREATORE, false))
                     .isInstanceOf(RichiestaNonValidaException.class);
             assertNienteScritto(p);
+        }
+
+        // ------ Punti ------
+
+        @Test
+        void assegnaIPuntiDopoAverScrittoIlRisultatoELiMostraInRisposta() {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            stubLock(p);
+            // Il calcolo legge vincitore e squadre dalla partita: devono essere già scritti quando parte
+            doAnswer(invocazione -> {
+                assertThat(p.getStato()).isEqualTo(StatoPartita.GIOCATA);
+                assertThat(RegoleRisultatoPartita.squadraVincitrice(p)).isEqualTo(RegoleRisultatoPartita.SQUADRA_1);
+                assertThat(p.getPartecipazioni()).extracting(Partecipazione::getSquadra).containsExactly(1, 2, 1, 2);
+                p.getPartecipazioni().get(1).setPuntiAssegnati(-1);
+                return null;
+            }).when(punteggiService).assegnaPunti(p);
+
+            PartitaDTO.DettaglioResponse r = service.registraRisultato(7, duePerDue(), TEL_2, false);
+
+            verify(punteggiService).assegnaPunti(p);
+            assertThat(r.getRisultato().getPuntiAssegnati()).isEqualTo(-1);
+        }
+
+        @Test
+        void unErroreNelCalcoloDeiPuntiArrivaAlChiamante() {
+            // L'eccezione deve uscire dal metodo @Transactional: è questo che annulla anche il risultato
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            stubLock(p);
+            IllegalStateException errore = new IllegalStateException("errore a metà");
+            doThrow(errore).when(punteggiService).assegnaPunti(p);
+
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_CREATORE, false)).isSameAs(errore);
+        }
+
+        @Test
+        void unaPartitaGiaGiocataNonRiceveAltriPunti() {
+            // Le partite già giocate, con i punti già assegnati, non vanno mai ricalcolate
+            Partita p = daRegistrare(StatoPartita.GIOCATA, FINE_APPENA_RAGGIUNTA);
+            p.getPartecipazioni().get(0).setPuntiAssegnati(3);
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.registraRisultato(7, duePerDue(), TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage(GIA_REGISTRATO);
+            verifyNoInteractions(punteggiService);
+            assertThat(p.getPartecipazioni().get(0).getPuntiAssegnati()).isEqualTo(3);
+        }
+
+        @Test
+        void unRifiutoSulBodyNonAssegnaPunti() {
+            stubLock(daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA));
+
+            assertThatThrownBy(() -> service.registraRisultato(7, new PartitaDTO.RisultatoRequest(), TEL_CREATORE, false))
+                    .isInstanceOf(RichiestaNonValidaException.class);
+            verifyNoInteractions(punteggiService);
         }
 
         private void assertRichiestaNonValida(PartitaDTO.RisultatoRequest request, String messaggio) {

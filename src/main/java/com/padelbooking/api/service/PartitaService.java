@@ -103,15 +103,18 @@ public class PartitaService {
     private final PartitaRepository partitaRepository;
     private final PartecipazioneRepository partecipazioneRepository;
     private final UtenteRepository utenteRepository;
+    private final PunteggiService punteggiService;
     private final Clock clock;
 
     public PartitaService(PartitaRepository partitaRepository,
                           PartecipazioneRepository partecipazioneRepository,
                           UtenteRepository utenteRepository,
+                          PunteggiService punteggiService,
                           Clock clock) {
         this.partitaRepository = partitaRepository;
         this.partecipazioneRepository = partecipazioneRepository;
         this.utenteRepository = utenteRepository;
+        this.punteggiService = punteggiService;
         this.clock = clock;
     }
 
@@ -467,7 +470,8 @@ public class PartitaService {
         }
         partita.setStato(StatoPartita.GIOCATA);
 
-        // T10: UC_GCL_2 aggiornamento punteggi
+        // UC_GCL_2: nella stessa transazione del risultato, dopo aver scritto set e squadre (RNF_A_7)
+        punteggiService.assegnaPunti(partita);
 
         return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso), partecipazione);
     }

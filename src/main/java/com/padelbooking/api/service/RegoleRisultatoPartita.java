@@ -8,7 +8,7 @@ import java.util.Optional;
 
 // Regole del risultato di una partita condivise dai service: quali set sono validi, quali sono stati
 // giocati e quale squadra ha vinto. Serve allo storico (T6), alla registrazione del risultato (T9)
-// e servirà al calcolo dei punteggi (T10), così il vincitore si stabilisce in un solo punto.
+// e al calcolo dei punteggi (T10), così il vincitore si stabilisce in un solo punto.
 // Classe di soli metodi statici, come RegoleTempoPartita.
 public final class RegoleRisultatoPartita {
 
