@@ -75,10 +75,15 @@ public final class RegoleTempoPartita {
         return !adesso.isBefore(inizioEffettivo(partita));
     }
 
+    // fine <= adesso: da qui si può registrare il risultato. Serve a distinguere il rifiuto
+    // "non ancora finita" da "termine scaduto", entrambi fuori da inFinestraRisultato
+    public static boolean finita(Partita partita, LocalDateTime adesso) {
+        return !adesso.isBefore(fineEffettiva(partita));
+    }
+
     // fine <= adesso <= fine + 24 h: registrazione del risultato
     public static boolean inFinestraRisultato(Partita partita, LocalDateTime adesso) {
-        LocalDateTime fine = fineEffettiva(partita);
-        return !adesso.isBefore(fine) && !adesso.isAfter(fine.plusHours(FINESTRA_RISULTATO_ORE));
+        return finita(partita, adesso) && !adesso.isAfter(fineEffettiva(partita).plusHours(FINESTRA_RISULTATO_ORE));
     }
 
     // Serve ai messaggi d'errore, che riportano la soglia in ore

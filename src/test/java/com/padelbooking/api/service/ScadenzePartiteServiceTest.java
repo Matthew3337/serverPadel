@@ -251,6 +251,36 @@ class ScadenzePartiteServiceTest {
             assertThat(p.getStato()).isEqualTo(StatoPartita.ANNULLATA);
             verify(avvisoRepository, never()).save(any());
         }
+
+        @Test
+        void giocataNonSiToccaDopoLInizio() {
+            // Una partita diventata GIOCATA tra la lettura delle candidate e il lock non si annulla
+            Partita p = partita(1, StatoPartita.GIOCATA, ADESSO.minusHours(3), 4);
+            p.setSet1Sq1(6);
+            p.setSet1Sq2(4);
+            p.setSet2Sq1(6);
+            p.setSet2Sq2(3);
+            stubCandidate(p);
+            stubLock(p);
+
+            service.eseguiGiro();
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.GIOCATA);
+            assertThat(p.getSet1Sq1()).isEqualTo(6);
+            verify(avvisoRepository, never()).save(any());
+        }
+
+        @Test
+        void giocataNonRiceveAvvisiPrimaDellInizio() {
+            Partita p = partita(1, StatoPartita.GIOCATA, ADESSO.plusHours(3), 2);
+            stubCandidate(p);
+            stubLock(p);
+
+            service.eseguiGiro();
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.GIOCATA);
+            verify(avvisoRepository, never()).save(any());
+        }
     }
 
     // ============================================

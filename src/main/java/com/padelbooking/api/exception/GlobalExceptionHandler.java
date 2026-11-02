@@ -35,6 +35,11 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.FORBIDDEN, ex.getMessage());
     }
 
+    @ExceptionHandler(RichiestaNonValidaException.class)
+    public ResponseEntity<Map<String, Object>> handleRichiestaNonValida(RichiestaNonValidaException ex) {
+        return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
+    }
+
     @ExceptionHandler(BadCredentialsException.class)
     public ResponseEntity<Map<String, Object>> handleBadCredentials(BadCredentialsException ex) {
         return buildResponse(HttpStatus.UNAUTHORIZED, "Telefono o password non corretti");

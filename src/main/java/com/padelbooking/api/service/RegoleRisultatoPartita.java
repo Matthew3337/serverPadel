@@ -4,10 +4,11 @@ import com.padelbooking.api.model.Partita;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
-// Regole del risultato di una partita condivise dai service: quali set sono stati giocati
-// e quale squadra ha vinto. Serve allo storico (T6) e servirà alla registrazione del risultato (T9)
-// e al calcolo dei punteggi (T10), così il vincitore si stabilisce in un solo punto.
+// Regole del risultato di una partita condivise dai service: quali set sono validi, quali sono stati
+// giocati e quale squadra ha vinto. Serve allo storico (T6), alla registrazione del risultato (T9)
+// e servirà al calcolo dei punteggi (T10), così il vincitore si stabilisce in un solo punto.
 // Classe di soli metodi statici, come RegoleTempoPartita.
 public final class RegoleRisultatoPartita {
 
@@ -17,12 +18,63 @@ public final class RegoleRisultatoPartita {
 
     // Al meglio dei 3 set: un risultato registrato ha almeno 2 set giocati
     private static final int SET_MIN = 2;
+    private static final int SET_MAX = 3;
+
+    // RF_GR_6: i game di una squadra in un set
+    private static final int GAME_MIN = 0;
+    private static final int GAME_MAX = 6;
+
+    // Messaggi del rifiuto (RNF_U_3): fanno parte del contratto con il client
+    private static final String MESSAGGIO_NUMERO_SET =
+            "Il risultato deve avere 2 o 3 set e una squadra deve vincerne esattamente 2";
+    private static final String MESSAGGIO_TERZO_SET_DI_TROPPO =
+            "Il terzo set non va inserito se una squadra ha vinto i primi due";
 
     private RegoleRisultatoPartita() {
     }
 
     // I game di un set: squadra1 e squadra2 sono quelli delle colonne setN_sq1 e setN_sq2
     public record SetGiocato(int squadra1, int squadra2) {
+    }
+
+    // I game di un set come arrivano dalla richiesta, non ancora validati: possono mancare
+    public record SetInserito(Integer squadra1, Integer squadra2) {
+    }
+
+    // ============================================
+    // Validità dei set inseriti
+    // ============================================
+
+    // Motivo per cui i set inseriti non formano un risultato valido, vuoto se lo formano (RF_GR_5, RF_GR_6).
+    // Prima ogni set da solo, poi il loro numero e chi li ha vinti. Con i set già validi nessuno è in
+    // parità, quindi i primi due danno un vincitore solo se li ha vinti entrambi la stessa squadra:
+    // in tal caso bastano due set, altrimenti serve il terzo, che porta per forza qualcuno a 2.
+    public static Optional<String> rifiutoSet(List<SetInserito> set) {
+        if (set == null) {
+            return Optional.of(MESSAGGIO_NUMERO_SET);
+        }
+        for (int i = 0; i < set.size(); i++) {
+            if (!setValido(set.get(i))) {
+                return Optional.of("Il set " + (i + 1)
+                        + " non è valido: i game vanno da " + GAME_MIN + " a " + GAME_MAX
+                        + " e il set non può finire in parità");
+            }
+        }
+        if (set.size() < SET_MIN || set.size() > SET_MAX) {
+            return Optional.of(MESSAGGIO_NUMERO_SET);
+        }
+
+        List<SetGiocato> primiDue = set.subList(0, SET_MIN).stream()
+                .map(s -> new SetGiocato(s.squadra1(), s.squadra2()))
+                .toList();
+        boolean primiDueStessaSquadra = squadraVincitrice(primiDue) != null;
+        if (set.size() == SET_MIN && !primiDueStessaSquadra) {
+            return Optional.of(MESSAGGIO_NUMERO_SET);
+        }
+        if (set.size() == SET_MAX && primiDueStessaSquadra) {
+            return Optional.of(MESSAGGIO_TERZO_SET_DI_TROPPO);
+        }
+        return Optional.empty();
     }
 
     // ============================================
@@ -75,6 +127,15 @@ public final class RegoleRisultatoPartita {
     // ============================================
     // Helper privati
     // ============================================
+
+    private static boolean setValido(SetInserito set) {
+        return gameValidi(set.squadra1()) && gameValidi(set.squadra2())
+                && !set.squadra1().equals(set.squadra2());
+    }
+
+    private static boolean gameValidi(Integer game) {
+        return game != null && game >= GAME_MIN && game <= GAME_MAX;
+    }
 
     private static void aggiungiSeGiocato(List<SetGiocato> set, Integer gameSquadra1, Integer gameSquadra2) {
         if (gameSquadra1 != null && gameSquadra2 != null) {
