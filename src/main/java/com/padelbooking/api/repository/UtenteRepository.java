@@ -30,4 +30,13 @@ public interface UtenteRepository extends JpaRepository<Utente, String> {
             ORDER BY u.cognome ASC, u.nome ASC, u.telefono ASC
             """)
     List<Utente> findInvitabili(@Param("idPartita") Integer idPartita, @Param("pattern") String pattern);
+
+    // Classifica (RF_GCL_2): gli utenti non admin per punteggio decrescente, a parità per cognome e nome.
+    // Il telefono rende stabile l'ordine tra omonimi.
+    @Query("""
+            SELECT u FROM Utente u
+            WHERE u.isAdmin = false
+            ORDER BY u.punteggio DESC, u.cognome ASC, u.nome ASC, u.telefono ASC
+            """)
+    List<Utente> findClassifica();
 }

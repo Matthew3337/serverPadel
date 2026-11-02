@@ -211,7 +211,7 @@ public class PartitaDTO {
     }
 
     // Risultato dal punto di vista dell'utente: squadraUtente ed esito sono null se l'utente non ha
-    // una squadra (anche l'admin e chi non gioca), puntiAssegnati è null finché i punteggi non sono calcolati (T10)
+    // una squadra (anche l'admin e chi non gioca), puntiAssegnati è null per chi non gioca e per i dati senza punti calcolati
     public static class RisultatoResponse {
         // Solo i set giocati: 2 o 3
         private List<SetResponse> set;
