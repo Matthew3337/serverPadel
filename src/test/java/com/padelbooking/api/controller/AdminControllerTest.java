@@ -253,8 +253,9 @@ class AdminControllerTest {
     // ============================================
 
     @Test
-    void partecipanti200ConDettaglio() throws Exception {
-        when(adminService.modificaPartecipanti(7, List.of(TEL_UTENTE, "3330000002"))).thenReturn(dettaglio("creata"));
+    void partecipanti200PassaIlTelefonoDellAdmin() throws Exception {
+        when(adminService.modificaPartecipanti(7, List.of(TEL_UTENTE, "3330000002"), TEL_ADMIN))
+                .thenReturn(dettaglio("creata"));
 
         asAdmin(jsonPut("/api/admin/partite/7/partecipanti", "{ \"telefoni\": [\"3330000001\", \"3330000002\"] }"))
                 .andExpect(status().isOk())
@@ -265,13 +266,13 @@ class AdminControllerTest {
 
     @Test
     void partecipantiErrori409() throws Exception {
-        when(adminService.modificaPartecipanti(eq(7), any()))
-                .thenThrow(new BusinessRuleException("Il creatore non può essere rimosso: annulla la partita"));
+        when(adminService.modificaPartecipanti(eq(7), any(), eq(TEL_ADMIN)))
+                .thenThrow(new BusinessRuleException("Un amministratore non può partecipare"));
 
         asAdmin(jsonPut("/api/admin/partite/7/partecipanti", "{ \"telefoni\": [\"3330000002\"] }"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.status").value(409))
-                .andExpect(jsonPath("$.errore").value("Il creatore non può essere rimosso: annulla la partita"));
+                .andExpect(jsonPath("$.errore").value("Un amministratore non può partecipare"));
     }
 
     @Test

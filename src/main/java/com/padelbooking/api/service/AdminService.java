@@ -67,8 +67,6 @@ public class AdminService {
     private static final String MESSAGGIO_TELEFONI_DUPLICATI = "L'elenco dei partecipanti contiene telefoni duplicati";
     private static final String MESSAGGIO_PARTECIPANTI_NON_MODIFICABILI =
             "Si possono modificare solo le partite non annullate e non giocate";
-    private static final String MESSAGGIO_CREATORE_NON_RIMOVIBILE =
-            "Il creatore non può essere rimosso: annulla la partita";
     private static final String MESSAGGIO_ADMIN_NON_PARTECIPA = "Un amministratore non può partecipare";
     private static final String MESSAGGIO_RISULTATO_NON_MODIFICABILE =
             "Il risultato si può modificare solo per le partite confermate o giocate";
@@ -172,8 +170,11 @@ public class AdminService {
     // Si toccano solo le differenze: chi resta conserva i suoi dati e nessun utente esce e rientra nella
     // stessa richiesta. Per questo l'ordine di Hibernate, che fa gli INSERT prima dei DELETE, non può
     // violare uk_partecipazione_utente.
+    // Se l'elenco non contiene il creatore, il creatore diventa l'admin che fa la richiesta: telefono_creatore
+    // è obbligatorio, ma l'admin non occupa un posto. Chi viene riaggiunto dopo è un partecipante normale.
     @Transactional
-    public PartitaDTO.DettaglioResponse modificaPartecipanti(Integer idPartita, List<String> telefoni) {
+    public PartitaDTO.DettaglioResponse modificaPartecipanti(Integer idPartita, List<String> telefoni,
+                                                             String telefonoAdmin) {
         if (telefoni == null || telefoni.isEmpty()) {
             throw new RichiestaNonValidaException(MESSAGGIO_ALMENO_UN_UTENTE);
         }
@@ -193,10 +194,6 @@ public class AdminService {
         if (telefoniFinali.size() + postiCampo > POSTI_MAX) {
             throw new RichiestaNonValidaException(MESSAGGIO_MASSIMO_GIOCATORI);
         }
-        // telefono_creatore è un riferimento obbligatorio: il creatore resta finché resta la partita
-        if (!telefoniFinali.contains(partita.getCreatore().getTelefono())) {
-            throw new BusinessRuleException(MESSAGGIO_CREATORE_NON_RIMOVIBILE);
-        }
 
         List<Partecipazione> postiUtente = partita.getPartecipazioni().stream()
                 .filter(pa -> pa.getTipo() == TipoPartecipazione.UTENTE)
@@ -214,6 +211,11 @@ public class AdminService {
         // Ogni INSERT prende un lock condiviso sulla riga utente per la chiave esterna: in ordine di telefono,
         // come i lock di PunteggiService, per non andare in deadlock con un risultato registrato in parallelo
         nuovi.sort(Comparator.comparing(Utente::getTelefono));
+
+        if (!telefoniFinali.contains(partita.getCreatore().getTelefono())) {
+            // L'admin ha autenticato la richiesta, quindi esiste: basta il riferimento per la chiave esterna
+            partita.setCreatore(utenteRepository.getReferenceById(telefonoAdmin));
+        }
 
         // postiUtente è una copia: si può togliere dalla lista della partita mentre la si scorre
         for (Partecipazione posto : postiUtente) {

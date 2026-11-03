@@ -54,13 +54,15 @@ public class AdminController {
         return ResponseEntity.ok(adminService.modificaLivello(telefono, request.getLivello()));
     }
 
-    // Sostituisce i partecipanti UTENTE con l'elenco indicato; i posti CAMPO restano
+    // Sostituisce i partecipanti UTENTE con l'elenco indicato; i posti CAMPO restano.
+    // Se l'elenco non contiene il creatore, il creatore diventa l'admin del token
     // PUT /api/admin/partite/7/partecipanti  { "telefoni": ["3330000001", "3330000002"] }
     @PutMapping("/partite/{id}/partecipanti")
     public ResponseEntity<PartitaDTO.DettaglioResponse> modificaPartecipanti(
             @PathVariable Integer id,
-            @RequestBody AdminDTO.PartecipantiRequest request) {
-        return ResponseEntity.ok(adminService.modificaPartecipanti(id, request.getTelefoni()));
+            @RequestBody AdminDTO.PartecipantiRequest request,
+            @AuthenticationPrincipal UtentePrincipal principal) {
+        return ResponseEntity.ok(adminService.modificaPartecipanti(id, request.getTelefoni(), principal.getTelefono()));
     }
 
     // Registrazione o correzione del risultato: stesso body di POST /api/partite/{id}/risultato

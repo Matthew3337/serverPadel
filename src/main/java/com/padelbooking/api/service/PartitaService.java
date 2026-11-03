@@ -32,7 +32,8 @@ import java.util.stream.Collectors;
 @Service
 public class PartitaService {
 
-    // RF_GP_9: una partita pubblica è visibile a chi ha un livello che differisce al massimo di 1 da quello del creatore
+    // RF_GP_9: una partita pubblica è visibile a chi ha un livello che differisce al massimo di 1 da quello
+    // del creatore; se il creatore è un admin, che non ha un livello di gioco, è visibile a tutti i livelli
     private static final double DIFFERENZA_LIVELLO_MAX = 1.0;
 
     // Una partita ha al massimo 4 posti (UTENTE o CAMPO): la soglia sta in RegoleConfermaPartita
@@ -324,8 +325,8 @@ public class PartitaService {
     // Utenti invitabili
     // ============================================
     // UC_GI_1 passo 2: il creatore cerca chi invitare tra gli utenti non admin che non hanno già un posto,
-    // di qualunque livello (RF_GI_2). L'admin non è mai il creatore di una partita da giocare, quindi
-    // riceve subito 403 come in entra, senza leggere la partita.
+    // di qualunque livello (RF_GI_2). L'admin non invita, anche se è il creatore perché ha tolto dalla
+    // partita il creatore originale, quindi riceve subito 403 come in entra, senza leggere la partita.
     @Transactional(readOnly = true)
     public List<PartitaDTO.InvitabileResponse> getInvitabili(Integer idPartita, String cerca,
                                                              String telefonoRichiedente, boolean isAdmin) {
@@ -692,7 +693,9 @@ public class PartitaService {
         return pattern.append('%').toString();
     }
 
-    // Creatore = il richiedente occupa il posto UTENTE del creatore
+    // Creatore = il richiedente occupa il posto UTENTE del creatore. Un admin creatore non occupa un posto
+    // (vedi AdminService.modificaPartecipanti): in quel caso nessun partecipante è il creatore, quindi
+    // nessuno invita o elimina e tutti possono uscire.
     private boolean eCreatore(Partita partita, Partecipazione partecipazione) {
         return partecipazione != null
                 && partecipazione.getUtente().getTelefono().equals(partita.getCreatore().getTelefono());
@@ -709,7 +712,14 @@ public class PartitaService {
 
     // I livelli sono multipli di 0,5 (vincolo ck_utente_livello), quindi esatti in double
     private boolean livelloCompatibile(Utente richiedente, Utente creatore) {
+        if (creatoreAdmin(creatore)) {
+            return true;
+        }
         return Math.abs(richiedente.getLivello() - creatore.getLivello()) <= DIFFERENZA_LIVELLO_MAX;
+    }
+
+    private boolean creatoreAdmin(Utente creatore) {
+        return Boolean.TRUE.equals(creatore.getIsAdmin());
     }
 
     // Cerca il nome del vincolo nella catena delle cause, come in PrenotazioneService
@@ -747,7 +757,8 @@ public class PartitaService {
     }
 
     // Il creatore per primo, poi gli altri posti in ordine di id (@OrderBy su Partita.partecipazioni):
-    // l'ordinamento è stabile, quindi sposta solo il creatore. delRichiedente è il suo posto, null
+    // l'ordinamento è stabile, quindi sposta solo il creatore, e con un admin creatore, che non ha un posto,
+    // resta l'ordine di id. delRichiedente è il posto di chi guarda, null
     // per l'admin e per chi non gioca: serve a vedere il risultato dal suo punto di vista.
     private PartitaDTO.DettaglioResponse toDettaglioResponse(Partita p, PartitaDTO.AzioniResponse azioni,
                                                              Partecipazione delRichiedente) {
@@ -850,7 +861,8 @@ public class PartitaService {
                 p.getOraFine(),
                 creatore.getNome(),
                 creatore.getCognome(),
-                creatore.getLivello(),
+                // L'admin non ha un livello di gioco: il client non lo mostra
+                creatoreAdmin(creatore) ? null : creatore.getLivello(),
                 POSTI_MAX - p.getPartecipazioni().size()
         );
     }
