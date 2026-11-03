@@ -91,6 +91,16 @@ public interface PartitaRepository extends JpaRepository<Partita, Integer> {
                                         @Param("postiMax") int postiMax,
                                         @Param("dataFino") LocalDate dataFino);
 
+    // Partite del giorno per l'admin (RF_GA_1–2): tutte quelle con questa data_partita, annullate comprese.
+    // Posti e utenti in JOIN FETCH perché servono a ogni riga: una sola query per l'intera pagina.
+    @Query("""
+            SELECT p FROM Partita p
+            LEFT JOIN FETCH p.partecipazioni pa
+            LEFT JOIN FETCH pa.utente
+            WHERE p.dataPartita = :data
+            """)
+    List<Partita> findByDataConPartecipanti(@Param("data") LocalDate data);
+
     // Partita con lock in scrittura (SELECT ... FOR UPDATE) fino alla fine della transazione:
     // serve all'ingresso, così due richieste simultanee sull'ultimo posto vengono serializzate
     // e la seconda vede la partecipazione aggiunta dalla prima

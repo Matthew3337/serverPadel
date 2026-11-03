@@ -516,6 +516,44 @@ class PunteggiServiceTest {
             assertVariazione(v, 1, 1);
         }
 
+        @Test
+        void assegnaPuntiNonFaFlushPrimaDeiLock() {
+            // Scriverebbe telefono_registrante sulla partita: il lock condiviso della chiave esterna, tenuto
+            // mentre si chiede quello in scrittura, manda in deadlock due registrazioni parallele
+            utente(VINCENTI, "01", 2.0, 0);
+            utente(PERDENTI, "02", 2.0, 0);
+
+            service.assegnaPunti(partita);
+
+            verify(entityManager, never()).flush();
+        }
+
+        @Test
+        void refreshDiAssegnaPuntiTrovaLoStornoGiaScritto() {
+            // refresh rilegge il punteggio dal database: senza il flush prima, lo storno andrebbe perso
+            Partecipazione v = conPunti(utente(VINCENTI, "01", 2.0, 8), 3);
+            utente(VINCENTI, "02", 2.0, 0);
+            utente(PERDENTI, "03", 2.0, 0);
+            utente(PERDENTI, "04", 2.0, 0);
+            int[] sulDatabase = {8};
+            doAnswer(invocazione -> {
+                sulDatabase[0] = v.getUtente().getPunteggio();
+                return null;
+            }).when(entityManager).flush();
+            doAnswer(invocazione -> {
+                if (invocazione.getArgument(0) == v.getUtente()) {
+                    v.getUtente().setPunteggio(sulDatabase[0]);
+                }
+                return null;
+            }).when(entityManager).refresh(any(Utente.class), any(LockModeType.class));
+
+            service.stornaPunti(partita);
+            service.assegnaPunti(partita);
+
+            // 8 - 3 + 3, non 8 + 3
+            assertVariazione(v, 3, 8);
+        }
+
         private Partecipazione conPunti(Partecipazione posto, int punti) {
             posto.setPuntiAssegnati(punti);
             return posto;

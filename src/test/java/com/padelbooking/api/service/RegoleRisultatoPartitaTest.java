@@ -1,6 +1,8 @@
 package com.padelbooking.api.service;
 
+import com.padelbooking.api.model.Partecipazione;
 import com.padelbooking.api.model.Partita;
+import com.padelbooking.api.model.TipoPartecipazione;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -168,6 +170,46 @@ class RegoleRisultatoPartitaTest {
     @Test
     void ilSetNonValidoHaLaPrecedenzaSulNumeroDeiSet() {
         assertThat(RegoleRisultatoPartita.rifiutoSet(set(6, 6))).contains(setNonValido(1));
+    }
+
+    // ============================================
+    // Punti
+    // ============================================
+
+    @Test
+    void puntiCalcolabiliConRisultatoEDueSquadreComplete() {
+        assertThat(RegoleRisultatoPartita.puntiCalcolabili(conSquadre(partita(6, 4, 6, 3, null, null), 1, 1, 2, 2)))
+                .isTrue();
+    }
+
+    @Test
+    void puntiNonCalcolabiliSenzaRisultato() {
+        assertThat(RegoleRisultatoPartita.puntiCalcolabili(conSquadre(new Partita(), 1, 1, 2, 2))).isFalse();
+    }
+
+    @Test
+    void puntiNonCalcolabiliSenzaVincitore() {
+        assertThat(RegoleRisultatoPartita.puntiCalcolabili(conSquadre(partita(6, 4, 3, 6, null, null), 1, 1, 2, 2)))
+                .isFalse();
+    }
+
+    @Test
+    void puntiNonCalcolabiliSeUnaSquadraNonEPiuCompleta() {
+        Partita risultato = partita(6, 4, 6, 3, null, null);
+
+        // Un giocatore è uscito, oppure è stato sostituito da chi non ha una squadra
+        assertThat(RegoleRisultatoPartita.puntiCalcolabili(conSquadre(risultato, 1, 1, 2))).isFalse();
+        assertThat(RegoleRisultatoPartita.puntiCalcolabili(conSquadre(partita(6, 4, 6, 3, null, null), 1, 1, 2, null)))
+                .isFalse();
+    }
+
+    private static Partita conSquadre(Partita p, Integer... squadre) {
+        for (Integer squadra : squadre) {
+            Partecipazione posto = new Partecipazione(TipoPartecipazione.CAMPO, null, false, false);
+            posto.setSquadra(squadra);
+            p.aggiungiPartecipazione(posto);
+        }
+        return p;
     }
 
     private static String setNonValido(int numero) {

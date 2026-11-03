@@ -63,6 +63,8 @@ public class SecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/campi/**").permitAll()
                         // Creazione/modifica/eliminazione campi solo admin
                         .requestMatchers("/api/campi/**").hasRole("ADMIN")
+                        // Area amministratore
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         // Tutto il resto richiede autenticazione
                         .anyRequest().authenticated()
                 )

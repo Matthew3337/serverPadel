@@ -80,7 +80,7 @@ public class PunteggiService {
     // ============================================
     // Storno dei punti
     // ============================================
-    // RF_GCL_12–14, per la correzione del risultato e l'annullamento di una partita giocata (T11):
+    // RF_GCL_12–14, per la correzione del risultato e per ogni uscita di una partita da GIOCATA:
     // toglie a ogni utente la variazione applicata e azzera punti_assegnati. Una perdita di 1 punto viene
     // quindi restituita. Il punteggio può essere cambiato dopo la partita, per questo vale ancora il
     // minimo 0 (RF_GCL_9). Chiamarlo di nuovo non cambia nulla, perché i posti senza punti si saltano.
@@ -96,6 +96,10 @@ public class PunteggiService {
             utente.setPunteggio(Math.max(PUNTEGGIO_MIN, utente.getPunteggio() - posto.getPuntiAssegnati()));
             posto.setPuntiAssegnati(null);
         }
+        // Il refresh di bloccaUtenti sostituisce i valori in memoria con quelli del database: se assegnaPunti
+        // segue nella stessa transazione, come nella correzione, senza il flush lo storno andrebbe perso.
+        // Chi chiama deve stornare prima di scrivere il risultato (vedi il commento su bloccaUtenti).
+        entityManager.flush();
     }
 
     // ============================================
@@ -112,6 +116,9 @@ public class PunteggiService {
     // giocatori in comune registrate insieme si mettono in coda invece di andare in deadlock.
     // Si usa refresh e non una query con lock: se l'utente è già nella sessione, una query lo blocca ma
     // lascia i valori letti prima, e il punteggio scritto da chi ha appena rilasciato il lock andrebbe perso.
+    // Niente flush qui: l'UPDATE di partita con telefono_registrante prende un lock condiviso sulla riga
+    // utente per la chiave esterna, e due registrazioni che lo tengono e chiedono quello in scrittura
+    // sulla stessa riga vanno in deadlock. Va scritto solo dopo aver preso questi lock.
     private void bloccaUtenti(List<Partecipazione> posti) {
         posti.stream()
                 .map(Partecipazione::getUtente)
