@@ -135,11 +135,16 @@ public class PartitaService {
         }
 
         if (isAdmin) {
-            // L'admin gestisce le partite dalla sua pagina: qui non ha azioni, e il risultato non ha il suo punto di vista
-            return toDettaglioResponse(partita, new PartitaDTO.AzioniResponse(false, false, false, false, false), null);
+            return dettaglioPerAdmin(partita);
         }
         Partecipazione delRichiedente = partecipazione.orElse(null);
         return toDettaglioResponse(partita, calcolaAzioni(partita, delRichiedente, LocalDateTime.now(clock)), delRichiedente);
+    }
+
+    // L'admin gestisce le partite dalla sua pagina: qui non ha azioni, e il risultato non ha il suo punto di
+    // vista. Lo usa anche AdminService, con la partita già letta nella sua transazione.
+    public PartitaDTO.DettaglioResponse dettaglioPerAdmin(Partita partita) {
+        return toDettaglioResponse(partita, new PartitaDTO.AzioniResponse(false, false, false, false, false), null);
     }
 
     // ============================================
@@ -451,17 +456,32 @@ public class PartitaService {
             throw rifiuto.get();
         }
 
+        validaRisultato(partita, request);
+        scriviRisultato(partita, request, partecipazione.getUtente(), adesso);
+
+        // UC_GCL_2: nella stessa transazione del risultato, dopo aver scritto set e squadre (RNF_A_7)
+        punteggiService.assegnaPunti(partita);
+
+        return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso), partecipazione);
+    }
+
+    // Le validazioni del risultato, uguali per chi registra e per l'admin che corregge (RF_GR_3, RF_GR_5, RF_GR_6)
+    public void validaRisultato(Partita partita, PartitaDTO.RisultatoRequest request) {
         verificaSquadre(partita, request.getSquadra1(), request.getSquadra2());
-        List<RegoleRisultatoPartita.SetInserito> set = setInseriti(request.getSet());
-        Optional<String> setNonValidi = RegoleRisultatoPartita.rifiutoSet(set);
+        Optional<String> setNonValidi = RegoleRisultatoPartita.rifiutoSet(setInseriti(request.getSet()));
         if (setNonValidi.isPresent()) {
             throw new RichiestaNonValidaException(setNonValidi.get());
         }
+    }
 
-        // Partita e partecipazioni sono gestite dall'EntityManager: le modifiche le scrive il dirty checking al commit
-        scriviSet(partita, set);
-        partita.setRegistrante(partecipazione.getUtente());
-        // Dal Clock iniettato, come "adesso", e non dall'orologio del database
+    // Scrive un risultato già validato e porta la partita a GIOCATA. I punti restano a chi chiama, che
+    // deve avere la partita in lock nella propria transazione. Partita e partecipazioni sono gestite
+    // dall'EntityManager: le modifiche le scrive il dirty checking al commit.
+    // adesso viene dal Clock iniettato, e non dall'orologio del database.
+    public void scriviRisultato(Partita partita, PartitaDTO.RisultatoRequest request, Utente registrante,
+                                LocalDateTime adesso) {
+        scriviSet(partita, setInseriti(request.getSet()));
+        partita.setRegistrante(registrante);
         partita.setDataRisultato(adesso);
         for (Partecipazione posto : partita.getPartecipazioni()) {
             posto.setSquadra(request.getSquadra1().contains(posto.getId())
@@ -469,11 +489,6 @@ public class PartitaService {
                     : RegoleRisultatoPartita.SQUADRA_2);
         }
         partita.setStato(StatoPartita.GIOCATA);
-
-        // UC_GCL_2: nella stessa transazione del risultato, dopo aver scritto set e squadre (RNF_A_7)
-        punteggiService.assegnaPunti(partita);
-
-        return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso), partecipazione);
     }
 
     // ============================================
@@ -499,6 +514,9 @@ public class PartitaService {
     // ============================================
     // Helper privati
     // ============================================
+    // patternRicerca, violaVincolo e partitaNonTrovata sono statici e visibili nel package perché li usa
+    // anche AdminService. Statici perché un metodo non pubblico chiamato sul proxy di Spring non è garantito
+    // che arrivi all'istanza con le dipendenze.
 
     // Stessa visibilità di GET /api/partite/{id} per chi non è admin: chi partecipa vede sempre la partita,
     // gli altri solo se la vedrebbero in dettaglio, altrimenti 404. Restituisce la partecipazione
@@ -643,7 +661,8 @@ public class PartitaService {
         return inseriti;
     }
 
-    // Con 2 set le colonne del terzo restano NULL, come richiede il vincolo ck_partita_set
+    // Con 2 set le colonne del terzo sono NULL, come richiede il vincolo ck_partita_set: vanno azzerate
+    // anche qui, perché una correzione dell'admin può passare da 3 set a 2
     private void scriviSet(Partita partita, List<RegoleRisultatoPartita.SetInserito> set) {
         partita.setSet1Sq1(set.get(0).squadra1());
         partita.setSet1Sq2(set.get(0).squadra2());
@@ -652,13 +671,16 @@ public class PartitaService {
         if (set.size() > 2) {
             partita.setSet3Sq1(set.get(2).squadra1());
             partita.setSet3Sq2(set.get(2).squadra2());
+        } else {
+            partita.setSet3Sq1(null);
+            partita.setSet3Sq2(null);
         }
     }
 
     // Pattern per findInvitabili: "contiene", senza distinzione tra maiuscole e minuscole.
     // Senza testo di ricerca diventa "%%", che corrisponde a tutti (nome e cognome non sono mai null).
     // %, _ e il carattere di escape scritti dall'utente vanno cercati come caratteri normali.
-    private String patternRicerca(String cerca) {
+    static String patternRicerca(String cerca) {
         String testo = cerca == null ? "" : cerca.trim().toLowerCase(Locale.ROOT);
         StringBuilder pattern = new StringBuilder("%");
         for (char c : testo.toCharArray()) {
@@ -691,7 +713,7 @@ public class PartitaService {
     }
 
     // Cerca il nome del vincolo nella catena delle cause, come in PrenotazioneService
-    private boolean violaVincolo(Throwable ex, String nomeVincolo) {
+    static boolean violaVincolo(Throwable ex, String nomeVincolo) {
         for (Throwable causa = ex; causa != null; causa = causa.getCause()) {
             if (causa.getMessage() != null && causa.getMessage().contains(nomeVincolo)) {
                 return true;
@@ -720,7 +742,7 @@ public class PartitaService {
                 .findFirst();
     }
 
-    private ResourceNotFoundException partitaNonTrovata(Integer idPartita) {
+    static ResourceNotFoundException partitaNonTrovata(Integer idPartita) {
         return new ResourceNotFoundException("Partita non trovata con id " + idPartita);
     }
 

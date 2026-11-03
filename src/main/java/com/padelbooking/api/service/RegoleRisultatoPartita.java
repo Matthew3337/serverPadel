@@ -20,6 +20,9 @@ public final class RegoleRisultatoPartita {
     private static final int SET_MIN = 2;
     private static final int SET_MAX = 3;
 
+    // Una squadra è composta da 2 giocatori
+    private static final int GIOCATORI_PER_SQUADRA = 2;
+
     // RF_GR_6: i game di una squadra in un set
     private static final int GAME_MIN = 0;
     private static final int GAME_MAX = 6;
@@ -125,8 +128,28 @@ public final class RegoleRisultatoPartita {
     }
 
     // ============================================
+    // Punti
+    // ============================================
+
+    // I punti si calcolano da un risultato con un vincitore e da due squadre complete. Un risultato salvato può
+    // non averle più: se l'admin toglie la partita da GIOCATA e cambia i partecipanti, chi è uscito non c'è più
+    // e chi è entrato non ha una squadra. Assegnare i punti darebbe -1 a chi non ha giocato.
+    public static boolean puntiCalcolabili(Partita partita) {
+        return risultatoRegistrato(partita)
+                && squadraVincitrice(partita) != null
+                && giocatoriInSquadra(partita, SQUADRA_1) == GIOCATORI_PER_SQUADRA
+                && giocatoriInSquadra(partita, SQUADRA_2) == GIOCATORI_PER_SQUADRA;
+    }
+
+    // ============================================
     // Helper privati
     // ============================================
+
+    private static long giocatoriInSquadra(Partita partita, int squadra) {
+        return partita.getPartecipazioni().stream()
+                .filter(posto -> posto.getSquadra() != null && posto.getSquadra() == squadra)
+                .count();
+    }
 
     private static boolean setValido(SetInserito set) {
         return gameValidi(set.squadra1()) && gameValidi(set.squadra2())

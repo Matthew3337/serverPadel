@@ -98,10 +98,40 @@ Nella risposta delle prenotazioni `id` è l'id della partita, `telefonoGiocatore
 
   Le condizioni del 409 sono quelle di `puoRegistrareRisultato` del dettaglio (stesso codice nel service). La partita è letta con lo stesso lock in scrittura di `entra`: di due giocatori che registrano insieme, uno riceve 200 e l'altro 409 `Il risultato è già stato registrato`.
 
-  Punti (`PunteggiService`): la media di ogni squadra usa il livello attuale dei giocatori e, per ogni posto `CAMPO`, `impostazioni.livello_giocatori_campo`. Ogni vincitore `UTENTE` riceve +3 se la media dei perdenti è maggiore o uguale a quella dei vincitori, altrimenti +1; ogni perdente `UTENTE` riceve -1. `utente.punteggio` non scende sotto 0 e `partecipazione.punti_assegnati` contiene la variazione effettivamente applicata (0 per un perdente a 0 punti). Per i posti `CAMPO` resta null. Le righe `utente` sono lette con un lock in scrittura, in ordine di telefono: partite con giocatori in comune registrate insieme si mettono in coda e nessuna variazione va persa. Le partite già `giocata` non vengono ricalcolate. `PunteggiService.stornaPunti` fa l'operazione inversa (minimo 0, `punti_assegnati` a null): nessun endpoint lo usa ancora, servirà alla correzione del risultato da parte dell'admin.
+  Punti (`PunteggiService`): la media di ogni squadra usa il livello attuale dei giocatori e, per ogni posto `CAMPO`, `impostazioni.livello_giocatori_campo`. Ogni vincitore `UTENTE` riceve +3 se la media dei perdenti è maggiore o uguale a quella dei vincitori, altrimenti +1; ogni perdente `UTENTE` riceve -1. `utente.punteggio` non scende sotto 0 e `partecipazione.punti_assegnati` contiene la variazione effettivamente applicata (0 per un perdente a 0 punti). Per i posti `CAMPO` resta null. Le righe `utente` sono lette con un lock in scrittura, in ordine di telefono: partite con giocatori in comune registrate insieme si mettono in coda e nessuna variazione va persa. Le partite già `giocata` non vengono ricalcolate. `PunteggiService.stornaPunti` fa l'operazione inversa (minimo 0, `punti_assegnati` a null): lo usano la correzione del risultato e ogni uscita da `giocata` decisa dall'admin (vedi "Area amministratore").
 
 ### Classifica (richiede header `Authorization: Bearer <token>`)
 - `GET /api/classifica` — gli utenti non admin, per punteggio decrescente e a parità per cognome e nome. Legge `utente.punteggio`, senza ricalcolare dallo storico. Risposta 200: `[ { posizione, telefono, nome, cognome, punteggio, utenteCorrente } ]`, `[]` se non ci sono utenti. Chi ha gli stessi punti ha la stessa `posizione` (1, 2, 2, 4). `utenteCorrente` è true solo sulla riga di chi chiama, quindi per un admin è sempre false. Nessun errore specifico (403 senza token).
+
+### Area amministratore (richiede header `Authorization: Bearer <token>` di un admin)
+Tutti gli endpoint `/api/admin/**` sono riservati al ruolo admin: un utente normale e chi non ha il token ricevono 403. Per il dettaglio di una partita l'admin usa `GET /api/partite/{id}`, che vede tutto con le azioni tutte false. Le risposte "dettaglio" hanno lo stesso formato, visto dall'admin (`azioni` tutte false; in `risultato` valgono null `squadraUtente`, `esito` e `puntiAssegnati`). Le scritture sulla partita prendono il lock in scrittura.
+
+- `GET /api/admin/partite?data=2026-11-05` — le partite con quella `data_partita`, annullate comprese. Un elemento per ogni campo, anche senza partite, ordinati per nome; le partite sono ordinate per inizio effettivo, quindi quella delle 00:30 della serata viene dopo quella delle 18:00. Risposta 200: `[ { idCampo, nomeCampo, partite: [ { id, oraInizio, oraFine, stato, tipo, giocatori, postiLiberi, risultato } ] } ]`, con `stato` minuscolo, `giocatori` come `"Nome Cognome"` oppure `"Giocatore del campo"` e `risultato` come `[ { squadra1, squadra2 } ]` oppure null. Errore 400 se `data` manca o non è valida.
+- `GET /api/admin/avvisi` — gli avvisi delle partite non annullate e non ancora iniziate, ordinati per inizio effettivo. Risposta 200: `[ { id, idPartita, nomeCampo, dataPartita, oraInizio, oraFine, postiLiberi } ]`.
+- `GET /api/admin/utenti?cerca=<testo>` — gli utenti non admin, per cognome, nome e telefono. `cerca` è facoltativo e funziona come in `invitabili`. Risposta 200: `[ { telefono, nome, cognome, livello, punteggio } ]`.
+- `PUT /api/admin/utenti/{telefono}/livello` — body `{ "livello": 2.5 }`. La riga dell'utente si rilegge con il lock in scrittura, così non si sovrascrive un punteggio appena aggiornato. Risposta 200: `{ telefono, nome, cognome, livello, punteggio }`. Errori:
+  - 400 `Il livello deve essere tra 0 e 5 con passo 0,5`;
+  - 404 `Utente non trovato`, anche se il telefono è di un admin.
+- `PUT /api/admin/partite/{id}/partecipanti` — body `{ "telefoni": ["3330000001", "3330000002"] }`, l'elenco completo dei partecipanti `UTENTE` dopo la modifica, senza limiti di tempo. I posti `CAMPO` restano e chi resta conserva i suoi dati. I nuovi hanno `invitato=false` e `confermata=true` solo se la partita è `confermata`. Una partita `creata` con 4 posti e tutti gli utenti confermati passa a `confermata`. Risposta 200: dettaglio. Errori, controllati in quest'ordine:
+  - 400 `Almeno un giocatore deve essere un utente` (elenco vuoto o mancante);
+  - 400 `L'elenco dei partecipanti contiene telefoni duplicati`;
+  - 404 `Partita non trovata con id N`;
+  - 409 `Si possono modificare solo le partite non annullate e non giocate`;
+  - 400 `Una partita può avere al massimo 4 giocatori` (contando i posti `CAMPO`);
+  - 409 `Il creatore non può essere rimosso: annulla la partita`;
+  - 404 `Utente non trovato`;
+  - 409 `Un amministratore non può partecipare`.
+- `PUT /api/admin/partite/{id}/risultato` — stesso body di `POST /api/partite/{id}/risultato`, senza limiti di tempo, per le partite `giocata` (correzione) e `confermata` (registrazione). In una sola transazione storna i punti già assegnati, salva set e squadre con `telefono_registrante` = admin e `data_risultato` = adesso, assegna i punti con i livelli attuali e porta la partita a `giocata`. Risposta 200: dettaglio. Errori, controllati in quest'ordine:
+  - 404 `Partita non trovata con id N`;
+  - 409 `Il risultato si può modificare solo per le partite confermate o giocate`;
+  - 400 le stesse validazioni di squadre e set di `POST /api/partite/{id}/risultato`.
+- `PUT /api/admin/partite/{id}/stato` — body `{ "stato": "annullata" }`, con `creata`, `confermata`, `annullata` o `giocata`. Qualunque transizione è ammessa. I punti esistono solo sulle partite `giocata`: a ogni uscita da `giocata`, verso qualunque stato, si stornano; a ogni ingresso in `giocata` con un risultato salvato si assegnano con i livelli attuali. Da `giocata` a `giocata` non cambia nulla. Il passaggio a `giocata` senza risultato resta permesso e non assegna punti; lo stesso vale se il risultato salvato non ha più due squadre complete, perché i partecipanti sono stati cambiati dopo l'uscita da `giocata` (il risultato si corregge con `PUT /api/admin/partite/{id}/risultato`). Il risultato resta salvato. Risposta 200: dettaglio. Errori:
+  - 400 `Stato non valido`;
+  - 404 `Partita non trovata con id N`;
+  - 409 `Lo slot è già occupato da un'altra partita` (da `annullata` a un altro stato, se lo slot è stato preso nel frattempo).
+- `POST /api/admin/partite/{id}/annulla` — senza body: porta la partita ad `annullata` in qualsiasi momento, con lo storno se era `giocata`. Il risultato resta salvato. Risposta 200: dettaglio. Errori:
+  - 404 `Partita non trovata con id N`;
+  - 409 `La partita è già annullata`.
 
 ## Attività pianificata delle scadenze
 
