@@ -23,15 +23,19 @@ public final class RegoleRisultatoPartita {
     // Una squadra è composta da 2 giocatori
     private static final int GIOCATORI_PER_SQUADRA = 2;
 
-    // RF_GR_6: i game di una squadra in un set
+    // RF_GR_6: si vince a 6 game con almeno 2 di scarto, altrimenti si arriva a 7 (7-5 o 7-6)
     private static final int GAME_MIN = 0;
-    private static final int GAME_MAX = 6;
+    private static final int GAME_VITTORIA = 6;
+    private static final int GAME_VITTORIA_AL_LIMITE = 7;
+    private static final int SCARTO_MINIMO = 2;
 
     // Messaggi del rifiuto (RNF_U_3): fanno parte del contratto con il client
     private static final String MESSAGGIO_NUMERO_SET =
             "Il risultato deve avere 2 o 3 set e una squadra deve vincerne esattamente 2";
     private static final String MESSAGGIO_TERZO_SET_DI_TROPPO =
             "Il terzo set non va inserito se una squadra ha vinto i primi due";
+    private static final String MOTIVO_SET_NON_VALIDO =
+            " non è valido: si vince a 6 game con almeno 2 di scarto, oppure 7-5 o 7-6";
 
     private RegoleRisultatoPartita() {
     }
@@ -58,9 +62,7 @@ public final class RegoleRisultatoPartita {
         }
         for (int i = 0; i < set.size(); i++) {
             if (!setValido(set.get(i))) {
-                return Optional.of("Il set " + (i + 1)
-                        + " non è valido: i game vanno da " + GAME_MIN + " a " + GAME_MAX
-                        + " e il set non può finire in parità");
+                return Optional.of("Il set " + (i + 1) + MOTIVO_SET_NON_VALIDO);
             }
         }
         if (set.size() < SET_MIN || set.size() > SET_MAX) {
@@ -151,13 +153,21 @@ public final class RegoleRisultatoPartita {
                 .count();
     }
 
+    // La regola non dipende da quale squadra ha vinto: conta solo il punteggio di chi vince e di chi perde
     private static boolean setValido(SetInserito set) {
-        return gameValidi(set.squadra1()) && gameValidi(set.squadra2())
-                && !set.squadra1().equals(set.squadra2());
-    }
-
-    private static boolean gameValidi(Integer game) {
-        return game != null && game >= GAME_MIN && game <= GAME_MAX;
+        if (set.squadra1() == null || set.squadra2() == null) {
+            return false;
+        }
+        int vincente = Math.max(set.squadra1(), set.squadra2());
+        int perdente = Math.min(set.squadra1(), set.squadra2());
+        if (perdente < GAME_MIN) {
+            return false;
+        }
+        if (vincente == GAME_VITTORIA) {
+            return vincente - perdente >= SCARTO_MINIMO;
+        }
+        return vincente == GAME_VITTORIA_AL_LIMITE && perdente >= GAME_VITTORIA_AL_LIMITE - SCARTO_MINIMO
+                && perdente < GAME_VITTORIA_AL_LIMITE;
     }
 
     private static void aggiungiSeGiocato(List<SetGiocato> set, Integer gameSquadra1, Integer gameSquadra2) {

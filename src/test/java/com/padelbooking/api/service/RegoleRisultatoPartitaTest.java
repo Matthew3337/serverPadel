@@ -4,9 +4,13 @@ import com.padelbooking.api.model.Partecipazione;
 import com.padelbooking.api.model.Partita;
 import com.padelbooking.api.model.TipoPartecipazione;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -107,7 +111,7 @@ class RegoleRisultatoPartitaTest {
     @Test
     void dueSetVintiDallaStessaSquadraSonoValidi() {
         assertThat(RegoleRisultatoPartita.rifiutoSet(set(6, 4, 6, 3))).isEmpty();
-        assertThat(RegoleRisultatoPartita.rifiutoSet(set(0, 6, 5, 6))).isEmpty();
+        assertThat(RegoleRisultatoPartita.rifiutoSet(set(0, 6, 4, 6))).isEmpty();
     }
 
     @Test
@@ -116,26 +120,63 @@ class RegoleRisultatoPartitaTest {
         assertThat(RegoleRisultatoPartita.rifiutoSet(set(3, 6, 6, 4, 0, 6))).isEmpty();
     }
 
+    // Tutti i punteggi validi, nei due sensi: 6 a un massimo di 4, 7-5, 7-6
+    private static final Set<String> PUNTEGGI_VALIDI = Set.of(
+            "6-0", "6-1", "6-2", "6-3", "6-4", "7-5", "7-6",
+            "0-6", "1-6", "2-6", "3-6", "4-6", "5-7", "6-7");
+
     @Test
-    void limitiDeiGameSonoCompresi() {
-        assertThat(RegoleRisultatoPartita.rifiutoSet(set(6, 0, 0, 6, 6, 5))).isEmpty();
+    void ogniPunteggioEValidoSoloSeEInElenco() {
+        // Ogni coppia di game da -1 a 9, come primo set: il secondo vale per la stessa squadra che vince il primo,
+        // così il risultato completo è sempre valido e l'unico motivo di rifiuto può essere il set in prova
+        for (int squadra1 = -1; squadra1 <= 9; squadra1++) {
+            for (int squadra2 = -1; squadra2 <= 9; squadra2++) {
+                String punteggio = squadra1 + "-" + squadra2;
+                Integer[] secondoSet = squadra1 > squadra2 ? new Integer[] {6, 0} : new Integer[] {0, 6};
+                Optional<String> rifiuto = RegoleRisultatoPartita.rifiutoSet(
+                        set(squadra1, squadra2, secondoSet[0], secondoSet[1]));
+
+                if (PUNTEGGI_VALIDI.contains(punteggio)) {
+                    assertThat(rifiuto).as(punteggio).isEmpty();
+                } else {
+                    assertThat(rifiuto).as(punteggio).contains(setNonValido(1));
+                }
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"5,4", "6,5", "7,4", "6,6", "7,7", "0,0", "8,6", "4,5", "5,6", "4,7", "6,8", "7,0", "5,5"})
+    void punteggiDelContrattoRifiutati(int squadra1, int squadra2) {
+        assertThat(RegoleRisultatoPartita.rifiutoSet(set(squadra1, squadra2, 6, 3))).contains(setNonValido(1));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"7,5", "7,6", "5,7", "6,7"})
+    void setAl7ValidiInOgniPosizione(int squadra1, int squadra2) {
+        int vinceSquadra1 = squadra1 > squadra2 ? 6 : 0;
+        int vinceSquadra2 = squadra1 > squadra2 ? 0 : 6;
+
+        assertThat(RegoleRisultatoPartita.rifiutoSet(
+                set(squadra1, squadra2, vinceSquadra1, vinceSquadra2))).isEmpty();
+        assertThat(RegoleRisultatoPartita.rifiutoSet(
+                set(vinceSquadra1, vinceSquadra2, squadra1, squadra2))).isEmpty();
+        // Terzo set decisivo: i primi due sono divisi
+        assertThat(RegoleRisultatoPartita.rifiutoSet(set(6, 4, 3, 6, squadra1, squadra2))).isEmpty();
     }
 
     @Test
-    void gameSopraIlMassimoIndicaIlSetSbagliato() {
-        assertThat(RegoleRisultatoPartita.rifiutoSet(set(7, 5, 6, 3))).contains(setNonValido(1));
-        assertThat(RegoleRisultatoPartita.rifiutoSet(set(6, 4, 3, 7))).contains(setNonValido(2));
-        assertThat(RegoleRisultatoPartita.rifiutoSet(set(6, 4, 3, 6, 7, 6))).contains(setNonValido(3));
+    void ilMessaggioIndicaIlSetSbagliato() {
+        assertThat(RegoleRisultatoPartita.rifiutoSet(set(6, 5, 6, 3))).contains(setNonValido(1));
+        assertThat(RegoleRisultatoPartita.rifiutoSet(set(6, 4, 3, 5))).contains(setNonValido(2));
+        assertThat(RegoleRisultatoPartita.rifiutoSet(set(6, 4, 3, 6, 8, 6))).contains(setNonValido(3));
+        assertThat(setNonValido(2))
+                .isEqualTo("Il set 2 non è valido: si vince a 6 game con almeno 2 di scarto, oppure 7-5 o 7-6");
     }
 
     @Test
     void gameNegativoNonEValido() {
         assertThat(RegoleRisultatoPartita.rifiutoSet(set(-1, 6, 6, 3))).contains(setNonValido(1));
-    }
-
-    @Test
-    void setInParitaNonEValido() {
-        assertThat(RegoleRisultatoPartita.rifiutoSet(set(6, 4, 3, 3))).contains(setNonValido(2));
     }
 
     @Test
@@ -213,7 +254,7 @@ class RegoleRisultatoPartitaTest {
     }
 
     private static String setNonValido(int numero) {
-        return "Il set " + numero + " non è valido: i game vanno da 0 a 6 e il set non può finire in parità";
+        return "Il set " + numero + " non è valido: si vince a 6 game con almeno 2 di scarto, oppure 7-5 o 7-6";
     }
 
     // Coppie di game in ordine: set(6, 4, 3, 6) sono i set 6-4 e 3-6

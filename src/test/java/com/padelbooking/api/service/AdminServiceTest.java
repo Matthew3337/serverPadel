@@ -346,6 +346,21 @@ class AdminServiceTest {
             assertThat(risposta.getPunteggio()).isEqualTo(8);
             assertThat(risposta.getLivello()).isEqualTo(3.0);
         }
+
+        @Test
+        void cambiareLivelloNonRicalcolaIPuntiGiaAssegnatiNeIlPunteggio() {
+            Partita p = giocata(8, 3, 4, 0);
+            Utente mario = utenti.get(TEL_A);
+            when(utenteRepository.findById(TEL_A)).thenReturn(Optional.of(mario));
+
+            AdminDTO.UtenteResponse risposta = service.modificaLivello(TEL_A, 5.0);
+
+            assertThat(mario.getLivello()).isEqualTo(5.0);
+            assertThat(risposta.getPunteggio()).isEqualTo(8);
+            assertPunti(p, 3, 3, -1, -1);
+            assertPunteggi(8, 3, 4, 0);
+            verify(entityManager, never()).flush();
+        }
     }
 
     // ============================================
@@ -368,7 +383,7 @@ class AdminServiceTest {
             Utente entra = stubUtente(TEL_D);
             stubIdAlFlush(p);
 
-            PartitaDTO.DettaglioResponse risposta = service.modificaPartecipanti(ID_PARTITA, List.of(TEL_D, TEL_B, TEL_A));
+            PartitaDTO.DettaglioResponse risposta = service.modificaPartecipanti(ID_PARTITA, List.of(TEL_D, TEL_B, TEL_A), TEL_ADMIN);
 
             assertThat(p.getPartecipazioni()).doesNotContain(esce);
             assertThat(p.getPartecipazioni()).hasSize(3);
@@ -398,7 +413,7 @@ class AdminServiceTest {
             stubUtente(TEL_B);
             stubUtente(TEL_C);
 
-            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_D, TEL_B, TEL_C));
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_D, TEL_B, TEL_C), TEL_ADMIN);
 
             assertThat(p.getPartecipazioni()).extracting(pa -> pa.getUtente().getTelefono())
                     .containsExactly(TEL_A, TEL_B, TEL_C, TEL_D);
@@ -410,7 +425,7 @@ class AdminServiceTest {
             List<Partecipazione> prima = new ArrayList<>(p.getPartecipazioni());
             stubLock(p);
 
-            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_B, TEL_A));
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_B, TEL_A), TEL_ADMIN);
 
             assertThat(p.getPartecipazioni()).containsExactlyElementsOf(prima);
             verify(utenteRepository, never()).findById(any());
@@ -423,7 +438,7 @@ class AdminServiceTest {
             stubLock(p);
             stubUtente(TEL_E);
 
-            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C, TEL_E));
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C, TEL_E), TEL_ADMIN);
 
             Partecipazione nuova = p.getPartecipazioni().get(3);
             assertThat(nuova.getUtente().getTelefono()).isEqualTo(TEL_E);
@@ -438,7 +453,7 @@ class AdminServiceTest {
             Partita p = partita(StatoPartita.CONFERMATA, 18, TEL_A, TEL_B, TEL_C, TEL_D);
             stubLock(p);
 
-            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B));
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B), TEL_ADMIN);
 
             assertThat(p.getPartecipazioni()).hasSize(2);
             assertThat(p.getStato()).isEqualTo(StatoPartita.CONFERMATA);
@@ -452,7 +467,7 @@ class AdminServiceTest {
             p.aggiungiPartecipazione(postoCampo());
             stubLock(p);
 
-            PartitaDTO.DettaglioResponse risposta = service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C));
+            PartitaDTO.DettaglioResponse risposta = service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C), TEL_ADMIN);
 
             assertThat(p.getStato()).isEqualTo(StatoPartita.CONFERMATA);
             assertThat(risposta.getStato()).isEqualTo("confermata");
@@ -465,7 +480,7 @@ class AdminServiceTest {
             stubLock(p);
             stubUtente(TEL_D);
 
-            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C, TEL_D));
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C, TEL_D), TEL_ADMIN);
 
             assertThat(p.getPartecipazioni()).hasSize(4);
             assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
@@ -478,7 +493,7 @@ class AdminServiceTest {
             p.aggiungiPartecipazione(campoPosto);
             stubLock(p);
 
-            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A));
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A), TEL_ADMIN);
 
             assertThat(p.getPartecipazioni()).hasSize(2).contains(campoPosto);
         }
@@ -520,7 +535,7 @@ class AdminServiceTest {
         void partitaInesistente404() {
             when(partitaRepository.findByIdPerAggiornamento(ID_PARTITA)).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A)))
+            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A), TEL_ADMIN))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessage("Partita non trovata con id 7");
         }
@@ -531,7 +546,7 @@ class AdminServiceTest {
             stubLock(p);
             when(utenteRepository.findById(TEL_C)).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_C)))
+            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_C), TEL_ADMIN))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessage("Utente non trovato");
             assertThat(p.getPartecipazioni()).hasSize(2);
@@ -541,7 +556,7 @@ class AdminServiceTest {
         void telefonoNullNonCorrispondeANessuno404() {
             stubLock(partita(StatoPartita.CREATA, 18, TEL_A));
 
-            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, Arrays.asList(TEL_A, null)))
+            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, Arrays.asList(TEL_A, null), TEL_ADMIN))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessage("Utente non trovato");
         }
@@ -552,21 +567,102 @@ class AdminServiceTest {
             Partita p = partita(stato, 18, TEL_A, TEL_B);
             stubLock(p);
 
-            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A)))
+            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A), TEL_ADMIN))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage("Si possono modificare solo le partite non annullate e non giocate");
             assertThat(p.getPartecipazioni()).hasSize(2);
         }
 
         @Test
-        void creatoreNonRimovibile409() {
+        void creatoreToltoIlCreatoreDiventaLAdminSenzaOccuparePosti() {
             Partita p = partita(StatoPartita.CREATA, 18, TEL_A, TEL_B);
             stubLock(p);
+            when(utenteRepository.getReferenceById(TEL_ADMIN)).thenReturn(admin);
 
-            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, List.of(TEL_B)))
-                    .isInstanceOf(BusinessRuleException.class)
-                    .hasMessage("Il creatore non può essere rimosso: annulla la partita");
+            PartitaDTO.DettaglioResponse risposta = service.modificaPartecipanti(ID_PARTITA, List.of(TEL_B), TEL_ADMIN);
+
+            assertThat(p.getCreatore()).isSameAs(admin);
+            assertThat(p.getPartecipazioni()).extracting(pa -> pa.getUtente().getTelefono()).containsExactly(TEL_B);
+            assertThat(risposta.getTelefonoCreatore()).isEqualTo(TEL_ADMIN);
+            assertThat(risposta.getPosti()).extracting(PartitaDTO.PostoResponse::getTelefono).containsExactly(TEL_B);
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+        }
+
+        @Test
+        void creatoreSostituitoLAdminNonContaNeiQuattroPosti() {
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A, TEL_B, TEL_C, TEL_D);
+            stubLock(p);
+            stubIdAlFlush(p);
+            stubUtente(TEL_E);
+            when(utenteRepository.getReferenceById(TEL_ADMIN)).thenReturn(admin);
+
+            PartitaDTO.DettaglioResponse risposta = service.modificaPartecipanti(ID_PARTITA,
+                    List.of(TEL_B, TEL_C, TEL_D, TEL_E), TEL_ADMIN);
+
+            assertThat(p.getCreatore()).isSameAs(admin);
+            assertThat(risposta.getPosti()).extracting(PartitaDTO.PostoResponse::getTelefono)
+                    .containsExactly(TEL_B, TEL_C, TEL_D, TEL_E);
+        }
+
+        @Test
+        void exCreatoreRiaggiuntoEUnPartecipanteNormaleEIlCreatoreRestaLAdmin() {
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A, TEL_B);
+            Utente exCreatore = utenti.get(TEL_A);
+            stubLock(p);
+            stubIdAlFlush(p);
+            when(utenteRepository.getReferenceById(TEL_ADMIN)).thenReturn(admin);
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_B), TEL_ADMIN);
+            when(utenteRepository.findById(TEL_A)).thenReturn(Optional.of(exCreatore));
+
+            PartitaDTO.DettaglioResponse risposta = service.modificaPartecipanti(ID_PARTITA,
+                    List.of(TEL_B, TEL_A), TEL_ADMIN);
+
+            assertThat(p.getCreatore()).isSameAs(admin);
+            assertThat(risposta.getTelefonoCreatore()).isEqualTo(TEL_ADMIN);
+            // Nell'ordine dei posti, non per primo: non è più il creatore
+            assertThat(risposta.getPosti()).extracting(PartitaDTO.PostoResponse::getTelefono)
+                    .containsExactly(TEL_B, TEL_A);
+            Partecipazione rientrato = p.getPartecipazioni().get(1);
+            assertThat(rientrato.getInvitato()).isFalse();
+            assertThat(rientrato.getConfermata()).isFalse();
+        }
+
+        @Test
+        void creatoreToltoConUnErroreNonCambiaNulla() {
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A, TEL_B);
+            Utente creatore = p.getCreatore();
+            stubLock(p);
+            when(utenteRepository.findById(TEL_C)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, List.of(TEL_B, TEL_C), TEL_ADMIN))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Utente non trovato");
+
+            assertThat(p.getCreatore()).isSameAs(creatore);
             assertThat(p.getPartecipazioni()).hasSize(2);
+            verify(utenteRepository, never()).getReferenceById(any());
+        }
+
+        @Test
+        void senzaIlCreatoreResta400SeLElencoEVuoto() {
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A);
+            Utente creatore = p.getCreatore();
+
+            assertRichiestaNonValida(List.of(), "Almeno un giocatore deve essere un utente");
+
+            assertThat(p.getCreatore()).isSameAs(creatore);
+        }
+
+        @Test
+        void conIlCreatoreInElencoIlCreatoreNonCambia() {
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A, TEL_B);
+            Utente creatore = p.getCreatore();
+            stubLock(p);
+
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A), TEL_ADMIN);
+
+            assertThat(p.getCreatore()).isSameAs(creatore);
+            verify(utenteRepository, never()).getReferenceById(any());
         }
 
         @Test
@@ -575,7 +671,7 @@ class AdminServiceTest {
             stubLock(p);
             when(utenteRepository.findById(TEL_ADMIN)).thenReturn(Optional.of(admin));
 
-            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_ADMIN)))
+            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_ADMIN), TEL_ADMIN))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessage("Un amministratore non può partecipare");
             assertThat(p.getPartecipazioni()).hasSize(1);
@@ -588,13 +684,13 @@ class AdminServiceTest {
             p.setCreatore(utenti.get(TEL_A));
             stubLock(p);
 
-            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A));
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A), TEL_ADMIN);
 
             assertThat(p.getPartecipazioni()).hasSize(1);
         }
 
         private void assertRichiestaNonValida(List<String> telefoni, String messaggio) {
-            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, telefoni))
+            assertThatThrownBy(() -> service.modificaPartecipanti(ID_PARTITA, telefoni, TEL_ADMIN))
                     .isInstanceOf(RichiestaNonValidaException.class)
                     .hasMessage(messaggio);
         }
@@ -811,7 +907,7 @@ class AdminServiceTest {
             assertNonValido(new PartitaDTO.RisultatoRequest(s1, s1, set("6-4", "6-3")),
                     "Le squadre devono contenere i 4 posti della partita");
             assertNonValido(new PartitaDTO.RisultatoRequest(s1, s2, set("6-6", "6-3")),
-                    "Il set 1 non è valido: i game vanno da 0 a 6 e il set non può finire in parità");
+                    "Il set 1 non è valido: si vince a 6 game con almeno 2 di scarto, oppure 7-5 o 7-6");
             assertNonValido(new PartitaDTO.RisultatoRequest(s1, s2, set("6-4", "3-6")),
                     "Il risultato deve avere 2 o 3 set e una squadra deve vincerne esattamente 2");
             assertNonValido(new PartitaDTO.RisultatoRequest(s1, s2, set("6-4", "6-3", "6-1")),
@@ -820,6 +916,20 @@ class AdminServiceTest {
             assertPunti(p, 3, 3, -1, -1);
             assertPunteggi(8, 3, 4, 0);
             verifyNoInteractions(entityManager);
+        }
+
+        @Test
+        void correzioneAccetta7a5E7a6() {
+            Partita p = giocata(8, 3, 4, 0);
+            stubLock(p);
+
+            PartitaDTO.DettaglioResponse risposta = service.modificaRisultato(ID_PARTITA,
+                    request(p, "7-6", "7-5"), TEL_ADMIN);
+
+            assertThat(risposta.getRisultato().getSet()).extracting(PartitaDTO.SetResponse::getSquadra1)
+                    .containsExactly(7, 7);
+            assertThat(p.getSet1Sq2()).isEqualTo(6);
+            assertThat(p.getSet2Sq2()).isEqualTo(5);
         }
 
         @Test
@@ -1140,7 +1250,7 @@ class AdminServiceTest {
             stubLock(p);
 
             service.modificaStato(ID_PARTITA, "creata");
-            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C));
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C), TEL_ADMIN);
 
             assertThat(p.getPartecipazioni()).hasSize(3);
             assertThat(p.getPartecipazioni()).extracting(Partecipazione::getPuntiAssegnati).containsOnlyNulls();
@@ -1153,7 +1263,7 @@ class AdminServiceTest {
             Partita p = giocata(8, 3, 4, 0);
             stubLock(p);
             service.modificaStato(ID_PARTITA, "creata");
-            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C));
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C), TEL_ADMIN);
 
             PartitaDTO.DettaglioResponse risposta = service.modificaStato(ID_PARTITA, "giocata");
 
@@ -1169,7 +1279,7 @@ class AdminServiceTest {
             stubLock(p);
             when(utenteRepository.findById(TEL_E)).thenReturn(Optional.of(utenti.get(TEL_E)));
             service.modificaStato(ID_PARTITA, "creata");
-            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C, TEL_E));
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C, TEL_E), TEL_ADMIN);
 
             service.modificaStato(ID_PARTITA, "giocata");
 

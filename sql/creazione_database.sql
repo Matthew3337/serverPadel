@@ -83,9 +83,9 @@ CREATE TABLE partita (
     CONSTRAINT fk_partita_registrante
         FOREIGN KEY (telefono_registrante) REFERENCES utente (telefono),
     CONSTRAINT ck_partita_game CHECK (
-        set1_sq1 BETWEEN 0 AND 6 AND set1_sq2 BETWEEN 0 AND 6 AND
-        set2_sq1 BETWEEN 0 AND 6 AND set2_sq2 BETWEEN 0 AND 6 AND
-        set3_sq1 BETWEEN 0 AND 6 AND set3_sq2 BETWEEN 0 AND 6),
+        set1_sq1 BETWEEN 0 AND 7 AND set1_sq2 BETWEEN 0 AND 7 AND
+        set2_sq1 BETWEEN 0 AND 7 AND set2_sq2 BETWEEN 0 AND 7 AND
+        set3_sq1 BETWEEN 0 AND 7 AND set3_sq2 BETWEEN 0 AND 7),
     CONSTRAINT ck_partita_set CHECK (
         ((set1_sq1 IS NULL) = (set1_sq2 IS NULL)) AND ((set1_sq1 IS NULL) = (set2_sq1 IS NULL)) AND
         ((set2_sq1 IS NULL) = (set2_sq2 IS NULL)) AND ((set3_sq1 IS NULL) = (set3_sq2 IS NULL)) AND
@@ -162,5 +162,5 @@ CREATE TABLE schema_migrazioni (
     PRIMARY KEY (nome_file)
 ) ENGINE = InnoDB;
 
--- Migrazioni già incluse in questo script (oggi nessuna), per esempio:
--- INSERT INTO schema_migrazioni (nome_file, applicata_il) VALUES ('2026-11-01_descrizione.sql', NOW());
+-- Migrazioni già incluse in questo script.
+INSERT INTO schema_migrazioni (nome_file, applicata_il) VALUES ('2026-11-03_game_fino_a_sette.sql', NOW());

@@ -2179,15 +2179,30 @@ class PartitaServiceTest {
 
         @Test
         void setNonValidoIndicaQualeSet() {
-            assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(6, 4), new PartitaDTO.SetRequest(7, 5)),
-                    "Il set 2 non è valido: i game vanno da 0 a 6 e il set non può finire in parità");
+            assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(6, 4), new PartitaDTO.SetRequest(6, 5)),
+                    "Il set 2 non è valido: si vince a 6 game con almeno 2 di scarto, oppure 7-5 o 7-6");
             assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(3, 3), new PartitaDTO.SetRequest(6, 4)),
-                    "Il set 1 non è valido: i game vanno da 0 a 6 e il set non può finire in parità");
+                    "Il set 1 non è valido: si vince a 6 game con almeno 2 di scarto, oppure 7-5 o 7-6");
             // Un elemento null nella lista, o un game mancante, non devono diventare un 500
             assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(6, 4), null),
-                    "Il set 2 non è valido: i game vanno da 0 a 6 e il set non può finire in parità");
+                    "Il set 2 non è valido: si vince a 6 game con almeno 2 di scarto, oppure 7-5 o 7-6");
             assertRichiestaNonValida(conSet(new PartitaDTO.SetRequest(6, null), new PartitaDTO.SetRequest(6, 4)),
-                    "Il set 1 non è valido: i game vanno da 0 a 6 e il set non può finire in parità");
+                    "Il set 1 non è valido: si vince a 6 game con almeno 2 di scarto, oppure 7-5 o 7-6");
+        }
+
+        @Test
+        void setSopraIlMassimoDiPrimaSonoAccettati() {
+            Partita p = daRegistrare(StatoPartita.CONFERMATA, FINE_APPENA_RAGGIUNTA);
+            stubLock(p);
+
+            PartitaDTO.DettaglioResponse r = service.registraRisultato(7, conSet(new PartitaDTO.SetRequest(7, 6),
+                    new PartitaDTO.SetRequest(5, 7), new PartitaDTO.SetRequest(7, 5)), TEL_CREATORE, false);
+
+            assertThat(r.getStato()).isEqualTo("giocata");
+            assertThat(p.getSet1Sq1()).isEqualTo(7);
+            assertThat(p.getSet1Sq2()).isEqualTo(6);
+            assertThat(p.getSet2Sq2()).isEqualTo(7);
+            assertThat(p.getSet3Sq1()).isEqualTo(7);
         }
 
         @Test
@@ -2560,6 +2575,148 @@ class PartitaServiceTest {
 
     private void stubLock(Partita p) {
         when(partitaRepository.findByIdPerAggiornamento(p.getId())).thenReturn(Optional.of(p));
+    }
+
+    // ============================================
+    // Creatore admin
+    // ============================================
+    // L'admin ha tolto il creatore: non ha un posto, e la partita resta ai suoi partecipanti
+    @Nested
+    class CreatoreAdmin {
+
+        private final Utente admin = new Utente("3330000100", "Ada", "Admin", "x", LocalDate.of(1990, 1, 1), true, 1.0);
+
+        @Test
+        void dettaglioPubblicaVisibileATuttiILivelli() {
+            stubPartita(conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PUBBLICA));
+            Utente lontano = stubEstraneo(5.0);
+
+            PartitaDTO.DettaglioResponse r = service.getDettaglio(7, TEL_ESTRANEO, false);
+            assertThat(r.getTelefonoCreatore()).isEqualTo("3330000100");
+            assertTutteFalse(r.getAzioni());
+
+            lontano.setLivello(0.0);
+            assertThat(service.getDettaglio(7, TEL_ESTRANEO, false).getId()).isEqualTo(7);
+        }
+
+        @Test
+        void dettaglioPrivataResta404PerChiNonGioca() {
+            stubPartita(conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PRIVATA));
+
+            assertThatThrownBy(() -> service.getDettaglio(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void dettaglioAnnullataResta404PerChiNonGioca() {
+            stubPartita(conCreatoreAdmin(StatoPartita.ANNULLATA, TipoPartita.PUBBLICA));
+
+            assertThatThrownBy(() -> service.getDettaglio(7, TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        @Test
+        void bachecaATuttiILivelliConLivelloCreatoreNull() {
+            stubEstraneo(5.0);
+            when(partitaRepository.findByTipoAndStatoDaData(TipoPartita.PUBBLICA, StatoPartita.CREATA,
+                    ADESSO.toLocalDate()))
+                    .thenReturn(List.of(conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PUBBLICA)));
+
+            List<PartitaDTO.BachecaResponse> r = service.getBachecaPubbliche(TEL_ESTRANEO, false);
+
+            assertThat(r).hasSize(1);
+            assertThat(r.get(0).getLivelloCreatore()).isNull();
+            assertThat(r.get(0).getNomeCreatore()).isEqualTo("Ada");
+            // Solo il partecipante occupa un posto, non l'admin
+            assertThat(r.get(0).getPostiLiberi()).isEqualTo(3);
+        }
+
+        @Test
+        void entraDaUnLivelloLontano() {
+            Partita p = conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PUBBLICA);
+            stubLock(p);
+            Utente lontano = stubEstraneo(5.0);
+
+            PartitaDTO.DettaglioResponse r = service.entra(7, TEL_ESTRANEO, false);
+
+            assertThat(p.getPartecipazioni()).extracting(Partecipazione::getUtente).containsExactly(secondo, lontano);
+            assertThat(r.getAzioni().getPuoUscire()).isTrue();
+            assertThat(r.getAzioni().getPuoInvitare()).isFalse();
+            assertThat(r.getAzioni().getPuoEliminare()).isFalse();
+        }
+
+        @Test
+        void partecipantePuoSoloUscireEIPostiRestanoInOrdine() {
+            Partita p = conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PRIVATA);
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubPartita(p);
+
+            PartitaDTO.DettaglioResponse r = service.getDettaglio(7, TEL_2, false);
+
+            assertThat(r.getAzioni().getPuoUscire()).isTrue();
+            assertThat(r.getAzioni().getPuoInvitare()).isFalse();
+            assertThat(r.getAzioni().getPuoEliminare()).isFalse();
+            assertThat(r.getTelefonoCreatore()).isEqualTo("3330000100");
+            assertThat(r.getPosti()).extracting(PartitaDTO.PostoResponse::getIdPosto).containsExactly(2, 3);
+        }
+
+        @Test
+        void esciLiberaIlPosto() {
+            Partita p = conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PUBBLICA);
+            stubLock(p);
+
+            service.esci(7, TEL_2, false);
+
+            assertThat(p.getPartecipazioni()).isEmpty();
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+        }
+
+        @Test
+        void nessunoEliminaLaPartita() {
+            Partita p = conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PUBBLICA);
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.elimina(7, TEL_2, false))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può eliminare la partita");
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+        }
+
+        @Test
+        void nessunoInvita() {
+            Partita p = conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PUBBLICA);
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.invita(7, TEL_ESTRANEO, TEL_2, false))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può invitare");
+        }
+
+        @Test
+        void nessunoCercaGliInvitabili() {
+            stubPartita(conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PUBBLICA));
+
+            assertThatThrownBy(() -> service.getInvitabili(7, null, TEL_2, false))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può invitare");
+        }
+
+        @Test
+        void lAdminCreatoreNonInvitaEHaAzioniTutteFalse() {
+            stubPartita(conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PUBBLICA));
+
+            assertTutteFalse(service.getDettaglio(7, "3330000100", true).getAzioni());
+        }
+
+        // Tre giorni all'inizio, un solo partecipante: il secondo utente, con il posto 2
+        private Partita conCreatoreAdmin(StatoPartita stato, TipoPartita tipo) {
+            Partita p = partita(stato, tipo, ADESSO.plusDays(3));
+            p.rimuoviPartecipazione(p.getPartecipazioni().get(0));
+            p.setCreatore(admin);
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, false));
+            return p;
+        }
     }
 
     // ============================================
