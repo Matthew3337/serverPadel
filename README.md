@@ -30,7 +30,7 @@ L'utente admin inserito via seed ha come password l'hash placeholder presente ne
 - `GET /api/campi/{id}` — pubblico, dettaglio campo
 - `POST /api/campi` — solo ADMIN
 - `PUT /api/campi/{id}` — solo ADMIN
-- `DELETE /api/campi/{id}` — solo ADMIN
+- `DELETE /api/campi/{id}` — solo ADMIN. Risposta 204. Errori: 404 `Campo non trovato con id N`; 409 `Il campo ha partite collegate e non può essere eliminato`, se esiste almeno una partita sul campo, di qualunque stato (`partita.id_campo` è una chiave esterna). Un cambio di orario con `PUT` non tocca le partite già prenotate.
 
 ### Prenotazioni (richiedono header `Authorization: Bearer <token>`)
 - `GET /api/prenotazioni/slot-disponibili?idCampo=1&data=2026-07-10` — uno slot è occupato se si sovrappone a una partita non annullata
@@ -66,7 +66,7 @@ Nella risposta delle prenotazioni `id` è l'id della partita, `telefonoGiocatore
   - 404 `Partita non trovata con id {id}` se la partita non esiste o l'utente non la vede (stessa visibilità del dettaglio);
   - 403 `Solo il creatore può eliminare la partita`, `L'amministratore non può eliminare le partite da qui`;
   - 409 `La partita non è più aperta` (stato diverso da `creata`), `L'eliminazione è chiusa: mancano meno di 24 ore all'inizio. Solo l'amministratore può annullare la partita`.
-- `POST /api/partite/{id}/esci` — senza body: un partecipante diverso dal creatore esce dalla partita; il posto si libera e lo stato non cambia (una pubblica torna in bacheca). Risposta 204 senza body. Errori:
+- `POST /api/partite/{id}/esci` — senza body: un partecipante diverso dal creatore esce dalla partita; il posto si libera e lo stato non cambia (una pubblica torna in bacheca). Se però non resta nessun partecipante `UTENTE`, anche con posti `CAMPO` rimasti, la partita passa ad `annullata` e lo slot torna libero: può capitare solo con un creatore admin, che non ha un posto. Risposta 204 senza body. Errori:
   - 404 `Partita non trovata con id {id}` se la partita non esiste o l'utente non la vede;
   - 403 `L'amministratore non può uscire dalle partite`;
   - 409 `Non partecipi a questa partita`, `Il creatore non può uscire dalla partita: può eliminarla`, `La partita non è più aperta` (stato diverso da `creata`), `L'uscita è chiusa: mancano meno di 24 ore all'inizio`.
@@ -108,7 +108,7 @@ Nella risposta delle prenotazioni `id` è l'id della partita, `telefonoGiocatore
 Tutti gli endpoint `/api/admin/**` sono riservati al ruolo admin: un utente normale e chi non ha il token ricevono 403. Per il dettaglio di una partita l'admin usa `GET /api/partite/{id}`, che vede tutto con le azioni tutte false. Le risposte "dettaglio" hanno lo stesso formato, visto dall'admin (`azioni` tutte false; in `risultato` valgono null `squadraUtente`, `esito` e `puntiAssegnati`). Le scritture sulla partita prendono il lock in scrittura.
 
 - `GET /api/admin/partite?data=2026-11-05` — le partite con quella `data_partita`, annullate comprese. Un elemento per ogni campo, anche senza partite, ordinati per nome; le partite sono ordinate per inizio effettivo, quindi quella delle 00:30 della serata viene dopo quella delle 18:00. Risposta 200: `[ { idCampo, nomeCampo, partite: [ { id, oraInizio, oraFine, stato, tipo, giocatori, postiLiberi, risultato } ] } ]`, con `stato` minuscolo, `giocatori` come `"Nome Cognome"` oppure `"Giocatore del campo"` e `risultato` come `[ { squadra1, squadra2 } ]` oppure null. Errore 400 se `data` manca o non è valida.
-- `GET /api/admin/avvisi` — gli avvisi delle partite non annullate e non ancora iniziate, ordinati per inizio effettivo. Risposta 200: `[ { id, idPartita, nomeCampo, dataPartita, oraInizio, oraFine, postiLiberi } ]`.
+- `GET /api/admin/avvisi` — gli avvisi delle partite non annullate, non ancora iniziate e con meno di 4 posti occupati, ordinati per inizio effettivo. L'avviso di una partita completata resta salvato: se si riapre un posto torna visibile. Risposta 200: `[ { id, idPartita, nomeCampo, dataPartita, oraInizio, oraFine, postiLiberi } ]`.
 - `GET /api/admin/utenti?cerca=<testo>` — gli utenti non admin, per cognome, nome e telefono. `cerca` è facoltativo e funziona come in `invitabili`. Risposta 200: `[ { telefono, nome, cognome, livello, punteggio } ]`.
 - `PUT /api/admin/utenti/{telefono}/livello` — body `{ "livello": 2.5 }`. La riga dell'utente si rilegge con il lock in scrittura, così non si sovrascrive un punteggio appena aggiornato. Il cambio di livello non ricalcola i punti: quelli già assegnati e `punteggio` restano invariati. Risposta 200: `{ telefono, nome, cognome, livello, punteggio }`. Errori:
   - 400 `Il livello deve essere tra 0 e 5 con passo 0,5`;
@@ -132,6 +132,25 @@ Tutti gli endpoint `/api/admin/**` sono riservati al ruolo admin: un utente norm
 - `POST /api/admin/partite/{id}/annulla` — senza body: porta la partita ad `annullata` in qualsiasi momento, con lo storno se era `giocata`. Il risultato resta salvato. Risposta 200: dettaglio. Errori:
   - 404 `Partita non trovata con id N`;
   - 409 `La partita è già annullata`.
+- `GET /api/admin/impostazioni` — risposta 200: `{ livelloGiocatoriCampo }`.
+- `PUT /api/admin/impostazioni/livello-giocatori-campo` — body `{ "livello": 2.5 }`. Vale per i calcoli successivi: i punti già assegnati non cambiano. Risposta 200: `{ livelloGiocatoriCampo }`. Errore 400 `Il livello deve essere tra 0 e 5 con passo 0,5`.
+- `POST /api/admin/partite/{id}/giocatori-campo` — body `{ "numero": 2 }`: aggiunge posti `CAMPO`, senza limiti di tempo. Una partita `creata` con 4 posti e tutti gli utenti confermati passa a `confermata`, anche dopo le 12h prima dell'inizio. Risposta 200: dettaglio. Errori, controllati in quest'ordine:
+  - 400 `Il numero deve essere tra 1 e 3`;
+  - 404 `Partita non trovata con id N`;
+  - 409 `Si possono modificare solo le partite non annullate e non giocate`;
+  - 409 `Puoi aggiungere al massimo N giocatori del campo` (N = posti liberi; con N = 1 `Puoi aggiungere al massimo 1 giocatore del campo`);
+  - 409 `Serve almeno un giocatore utente`.
+- `DELETE /api/admin/partite/{id}/giocatori-campo/{idPosto}` — toglie un posto `CAMPO`. Lo stato non cambia: se una `confermata` resta sotto 4 posti, all'inizio la annulla lo scheduler. Risposta 200: dettaglio. Errori, controllati in quest'ordine:
+  - 404 `Partita non trovata con id N`;
+  - 409 `Si possono modificare solo le partite non annullate e non giocate`;
+  - 404 `Giocatore del campo non trovato` (posto inesistente, di un'altra partita o di tipo `UTENTE`).
+- `POST /api/admin/partite` — crea una partita da zero. Body: `{ "idCampo": 1, "dataPartita": "2026-11-05", "oraInizio": "18:00", "tipo": "PUBBLICA", "telefoni": ["3330000001"], "giocatoriCampo": 1 }`. Il creatore è l'admin del token e non occupa un posto, quindi valgono le regole del creatore admin (vedi `PUT /api/admin/partite/{id}/partecipanti`). `telefoni` ha da 1 a 4 utenti (`invitato=false`, `confermata=false`); `giocatoriCampo` è facoltativo (default 0); in tutto al massimo 4 posti. Lo stato è `creata`, anche con 4 posti. Le regole di slot sono quelle di `POST /api/prenotazioni`. Risposta 201: dettaglio. Errori, controllati in quest'ordine:
+  - 400 `Il campo è obbligatorio`, `La data è obbligatoria`, `L'ora di inizio è obbligatoria`, `Il tipo è obbligatorio`, `Il tipo deve essere PUBBLICA o PRIVATA`;
+  - 400 `Almeno un giocatore deve essere un utente`, `L'elenco dei partecipanti contiene telefoni duplicati`, `Il numero di giocatori del campo non può essere negativo`, `Una partita può avere al massimo 4 giocatori`;
+  - 404 `Campo non trovato con id N`;
+  - 409 `L'orario richiesto è fuori dalla fascia di apertura del campo`, `Non è possibile prenotare uno slot nel passato`, `Lo slot selezionato è già stato prenotato`;
+  - 404 `Utente non trovato`;
+  - 409 `Un amministratore non può partecipare`.
 
 ## Attività pianificata delle scadenze
 

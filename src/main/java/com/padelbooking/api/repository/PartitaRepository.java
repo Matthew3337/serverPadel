@@ -21,6 +21,9 @@ public interface PartitaRepository extends JpaRepository<Partita, Integer> {
     // (si passa ANNULLATA: le annullate restano in tabella ma non occupano lo slot)
     List<Partita> findByCampoIdAndDataPartitaAndStatoNot(Integer campoId, LocalDate dataPartita, StatoPartita stato);
 
+    // Partite di qualunque stato sul campo: partita.id_campo è una chiave esterna, anche le annullate lo vincolano
+    boolean existsByCampoId(Integer campoId);
+
     // Partite in cui l'utente occupa un posto come UTENTE, escluse quelle con lo stato indicato.
     // EXISTS invece di JOIN per non duplicare la partita se l'utente avesse più righe.
     @Query("""

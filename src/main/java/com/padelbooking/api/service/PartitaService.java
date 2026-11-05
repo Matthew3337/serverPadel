@@ -297,6 +297,8 @@ public class PartitaService {
     // ============================================
     // RF_GP_16, RF_GP_17: un partecipante diverso dal creatore esce fino a 24 ore prima dell'inizio.
     // Il posto si libera e lo stato della partita non cambia: una pubblica torna in bacheca.
+    // Fa eccezione l'uscita dell'ultimo giocatore utente, possibile solo con un creatore admin che non ha
+    // un posto: i posti CAMPO da soli non fanno una partita, quindi passa subito ad ANNULLATA (T12).
     @Transactional
     public void esci(Integer idPartita, String telefonoRichiedente, boolean isAdmin) {
         if (isAdmin) {
@@ -319,6 +321,11 @@ public class PartitaService {
         // la riga al flush del commit, così il vincolo unico uk_partecipazione_utente non blocca
         // un nuovo ingresso dello stesso utente
         partita.rimuoviPartecipazione(partecipazione);
+
+        if (!RegoleConfermaPartita.haGiocatoriUtente(partita)) {
+            partita.setStato(StatoPartita.ANNULLATA);
+            // T13: notifiche di annullamento (RF_GN_3, RF_GN_7)
+        }
     }
 
     // ============================================

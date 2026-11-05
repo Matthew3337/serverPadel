@@ -2662,13 +2662,37 @@ class PartitaServiceTest {
         }
 
         @Test
-        void esciLiberaIlPosto() {
+        void esciDellUltimoUtenteAnnullaLaPartita() {
             Partita p = conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PUBBLICA);
             stubLock(p);
 
             service.esci(7, TEL_2, false);
 
             assertThat(p.getPartecipazioni()).isEmpty();
+            assertThat(p.getStato()).isEqualTo(StatoPartita.ANNULLATA);
+        }
+
+        @Test
+        void esciDellUltimoUtenteAnnullaAncheConPostiCampo() {
+            Partita p = conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PUBBLICA);
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubLock(p);
+
+            service.esci(7, TEL_2, false);
+
+            assertThat(p.getPartecipazioni()).extracting(Partecipazione::getId).containsExactly(3);
+            assertThat(p.getStato()).isEqualTo(StatoPartita.ANNULLATA);
+        }
+
+        @Test
+        void esciConUnAltroUtenteLasciaLoStato() {
+            Partita p = conCreatoreAdmin(StatoPartita.CREATA, TipoPartita.PUBBLICA);
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.UTENTE, creatore, false, false));
+            stubLock(p);
+
+            service.esci(7, TEL_2, false);
+
+            assertThat(p.getPartecipazioni()).hasSize(1);
             assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
         }
 

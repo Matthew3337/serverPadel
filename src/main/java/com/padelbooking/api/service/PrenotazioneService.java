@@ -108,13 +108,28 @@ public class PrenotazioneService {
     // Il creatore è l'utente autenticato (telefono dal JWT) ed è l'unico giocatore iniziale:
     // gli altri entrano dopo, tramite inviti o bacheca pubblica.
     public PrenotazioneDTO.Response create(PrenotazioneDTO.CreateRequest request, String telefonoCreatore) {
-        Campo campo = campoService.trovaCampoOLancia(request.getIdCampo());
+        Partita partita = nuovaPartitaSuSlot(request.getIdCampo(), request.getDataPrenotazione(), request.getOraInizio());
 
-        LocalTime oraInizio = request.getOraInizio();
+        Utente creatore = trovaUtenteOLancia(telefonoCreatore);
+        partita.setCreatore(creatore);
+        // Il valore è già validato dal @Pattern del DTO
+        partita.setTipo(TipoPartita.valueOf(request.getTipo()));
+
+        // Il creatore entra direttamente nella partita: non è un invito da accettare, per questo invitato = false
+        partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, creatore, false, false));
+
+        return toResponse(salvaNuovaPartita(partita));
+    }
+
+    // Controlla che lo slot sia prenotabile e prepara la partita CREATA, ancora da salvare: creatore, tipo e
+    // posti li aggiunge il chiamante. Le regole di slot sono le stesse per l'utente e per l'admin (T12).
+    public Partita nuovaPartitaSuSlot(Integer idCampo, LocalDate data, LocalTime oraInizio) {
+        Campo campo = campoService.trovaCampoOLancia(idCampo);
+
         LocalTime oraFine = oraInizio.plusMinutes(DURATA_SLOT_MINUTI);
 
         validaSlotAllInternoOrarioApertura(campo, oraInizio);
-        validaDataNonPassata(campo, request.getDataPrenotazione(), oraInizio);
+        validaDataNonPassata(campo, data, oraInizio);
 
         // Controlliamo la sovrapposizione con qualsiasi partita attiva sullo stesso
         // campo/data, non solo l'uguaglianza esatta dell'ora di inizio: altrimenti due
@@ -123,7 +138,7 @@ public class PrenotazioneService {
         long nuovoInizioOffset = minutiDaApertura(campo, oraInizio);
         long nuovoFineOffset = nuovoInizioOffset + DURATA_SLOT_MINUTI;
 
-        boolean slotOccupato = trovaPartiteAttive(request.getIdCampo(), request.getDataPrenotazione())
+        boolean slotOccupato = trovaPartiteAttive(idCampo, data)
                 .stream()
                 .anyMatch(p -> {
                     long inizioEsistente = minutiDaApertura(campo, p.getOraInizio());
@@ -135,33 +150,28 @@ public class PrenotazioneService {
             throw new BusinessRuleException(MESSAGGIO_SLOT_OCCUPATO);
         }
 
-        Utente creatore = trovaUtenteOLancia(telefonoCreatore);
-
         Partita partita = new Partita();
         partita.setCampo(campo);
-        partita.setCreatore(creatore);
-        partita.setDataPartita(request.getDataPrenotazione());
+        partita.setDataPartita(data);
         partita.setOraInizio(oraInizio);
         partita.setOraFine(oraFine);
-        // Il valore è già validato dal @Pattern del DTO
-        partita.setTipo(TipoPartita.valueOf(request.getTipo()));
         partita.setStato(StatoPartita.CREATA);
+        return partita;
+    }
 
-        // Il creatore entra direttamente nella partita: non è un invito da accettare, per questo invitato = false
-        partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, creatore, false, false));
-
-        Partita salvata;
+    // Con la generazione IDENTITY il save esegue subito gli INSERT, anche dentro una transazione: la violazione
+    // arriva qui e non al commit
+    public Partita salvaNuovaPartita(Partita partita) {
         try {
-            salvata = partitaRepository.save(partita);
+            return partitaRepository.save(partita);
         } catch (DataIntegrityViolationException ex) {
-            // Il controllo di sovrapposizione sopra non basta con richieste simultanee:
+            // Il controllo di sovrapposizione non basta con richieste simultanee:
             // in quel caso è il vincolo unico sul DB a rifiutare la seconda partita.
             if (violaVincolo(ex, VINCOLO_SLOT_UNICO)) {
                 throw new BusinessRuleException(MESSAGGIO_SLOT_OCCUPATO);
             }
             throw ex;
         }
-        return toResponse(salvata);
     }
 
     // ============================================

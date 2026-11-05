@@ -37,6 +37,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -82,6 +83,11 @@ class AdminControllerTest {
             "PUT, /api/admin/partite/7/risultato",
             "PUT, /api/admin/partite/7/stato",
             "POST, /api/admin/partite/7/annulla",
+            "GET, /api/admin/impostazioni",
+            "PUT, /api/admin/impostazioni/livello-giocatori-campo",
+            "POST, /api/admin/partite/7/giocatori-campo",
+            "DELETE, /api/admin/partite/7/giocatori-campo/12",
+            "POST, /api/admin/partite",
             // Anche un path senza controller è riservato: non si rivela cosa esiste
             "GET, /api/admin/altro"
     })
@@ -345,8 +351,105 @@ class AdminControllerTest {
     }
 
     // ============================================
+    // Impostazioni
+    // ============================================
+
+    @Test
+    void impostazioni200() throws Exception {
+        when(adminService.getImpostazioni()).thenReturn(new AdminDTO.ImpostazioniResponse(2.0));
+
+        asAdmin(get("/api/admin/impostazioni"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.livelloGiocatoriCampo").value(2.0));
+    }
+
+    @Test
+    void livelloGiocatoriCampo200E400() throws Exception {
+        when(adminService.modificaLivelloGiocatoriCampo(2.5)).thenReturn(new AdminDTO.ImpostazioniResponse(2.5));
+        when(adminService.modificaLivelloGiocatoriCampo(9.0))
+                .thenThrow(new RichiestaNonValidaException("Il livello deve essere tra 0 e 5 con passo 0,5"));
+
+        asAdmin(jsonPut("/api/admin/impostazioni/livello-giocatori-campo", "{ \"livello\": 2.5 }"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.livelloGiocatoriCampo").value(2.5));
+        asAdmin(jsonPut("/api/admin/impostazioni/livello-giocatori-campo", "{ \"livello\": 9 }"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.errore").value("Il livello deve essere tra 0 e 5 con passo 0,5"));
+    }
+
+    // ============================================
+    // Giocatori campo
+    // ============================================
+
+    @Test
+    void aggiungiGiocatoriCampo200E409() throws Exception {
+        when(adminService.aggiungiGiocatoriCampo(7, 2)).thenReturn(dettaglio("confermata"));
+        when(adminService.aggiungiGiocatoriCampo(7, 3))
+                .thenThrow(new BusinessRuleException("Puoi aggiungere al massimo 2 giocatori del campo"));
+
+        asAdmin(jsonPost("/api/admin/partite/7/giocatori-campo", "{ \"numero\": 2 }"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.stato").value("confermata"));
+        asAdmin(jsonPost("/api/admin/partite/7/giocatori-campo", "{ \"numero\": 3 }"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errore").value("Puoi aggiungere al massimo 2 giocatori del campo"));
+    }
+
+    @Test
+    void rimuoviGiocatoreCampo200E404() throws Exception {
+        when(adminService.rimuoviGiocatoreCampo(7, 12)).thenReturn(dettaglio("creata"));
+        when(adminService.rimuoviGiocatoreCampo(7, 13))
+                .thenThrow(new ResourceNotFoundException("Giocatore del campo non trovato"));
+
+        asAdmin(delete("/api/admin/partite/7/giocatori-campo/12"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(7));
+        asAdmin(delete("/api/admin/partite/7/giocatori-campo/13"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.errore").value("Giocatore del campo non trovato"));
+    }
+
+    // ============================================
+    // Creazione di una partita
+    // ============================================
+
+    @Test
+    void creaPartita201ConIlCreatoreDalToken() throws Exception {
+        when(adminService.creaPartita(any(), eq(TEL_ADMIN))).thenReturn(dettaglio("creata"));
+
+        asAdmin(jsonPost("/api/admin/partite", """
+                { "idCampo": 1, "dataPartita": "2026-11-05", "oraInizio": "18:00", "tipo": "PUBBLICA",
+                  "telefoni": ["3330000001"], "giocatoriCampo": 1 }
+                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.stato").value("creata"));
+
+        ArgumentCaptor<AdminDTO.NuovaPartitaRequest> richiesta = ArgumentCaptor.forClass(AdminDTO.NuovaPartitaRequest.class);
+        verify(adminService).creaPartita(richiesta.capture(), eq(TEL_ADMIN));
+        assertThat(richiesta.getValue().getIdCampo()).isEqualTo(1);
+        assertThat(richiesta.getValue().getDataPartita()).isEqualTo(LocalDate.of(2026, 11, 5));
+        assertThat(richiesta.getValue().getOraInizio()).isEqualTo(LocalTime.of(18, 0));
+        assertThat(richiesta.getValue().getTipo()).isEqualTo("PUBBLICA");
+        assertThat(richiesta.getValue().getTelefoni()).containsExactly(TEL_UTENTE);
+        assertThat(richiesta.getValue().getGiocatoriCampo()).isEqualTo(1);
+    }
+
+    @Test
+    void creaPartitaConDataIllegibile400() throws Exception {
+        asAdmin(jsonPost("/api/admin/partite", "{ \"dataPartita\": \"domani\" }"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400));
+        verifyNoInteractions(adminService);
+    }
+
+    // ============================================
     // Helper
     // ============================================
+
+    private static MockHttpServletRequestBuilder jsonPost(String path, String body) {
+        return post(path).contentType(MediaType.APPLICATION_JSON).content(body);
+    }
 
     private ResultActions asAdmin(MockHttpServletRequestBuilder richiesta) throws Exception {
         return mockMvc.perform(richiesta.with(user(principal(TEL_ADMIN, true))));
