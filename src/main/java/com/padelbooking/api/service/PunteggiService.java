@@ -30,8 +30,9 @@ public class PunteggiService {
     // RF_GCL_9
     private static final int PUNTEGGIO_MIN = 0;
 
-    // La tabella impostazioni ha una sola riga, con questo id (vincolo ck_impostazioni_singola)
-    private static final int ID_IMPOSTAZIONI = 1;
+    // La tabella impostazioni ha una sola riga, con questo id (vincolo ck_impostazioni_singola).
+    // La modifica anche AdminService
+    static final int ID_IMPOSTAZIONI = 1;
 
     private final ImpostazioniRepository impostazioniRepository;
     private final EntityManager entityManager;

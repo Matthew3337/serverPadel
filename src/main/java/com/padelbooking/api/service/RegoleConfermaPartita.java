@@ -28,6 +28,12 @@ public final class RegoleConfermaPartita {
         return POSTI_MAX;
     }
 
+    // Ogni partita attiva ha almeno un giocatore utente: i posti CAMPO da soli non bastano
+    public static boolean haGiocatoriUtente(Partita partita) {
+        return partita.getPartecipazioni().stream()
+                .anyMatch(pa -> pa.getTipo() == TipoPartecipazione.UTENTE);
+    }
+
     // ============================================
     // Passaggio a "confermata"
     // ============================================

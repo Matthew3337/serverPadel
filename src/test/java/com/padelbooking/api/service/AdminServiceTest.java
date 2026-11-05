@@ -107,10 +107,12 @@ class AdminServiceTest {
     void setUp() {
         Clock fisso = Clock.fixed(ADESSO.atZone(ZONA).toInstant(), ZONA);
         PunteggiService punteggi = new PunteggiService(impostazioniRepository, entityManager);
+        PrenotazioneService prenotazioni = new PrenotazioneService(partitaRepository, utenteRepository,
+                new CampoService(campoRepository, partitaRepository), fisso);
         PartitaService partite = new PartitaService(partitaRepository, partecipazioneRepository, utenteRepository,
                 punteggi, fisso);
         service = new AdminService(partitaRepository, campoRepository, avvisoRepository, utenteRepository,
-                partite, punteggi, entityManager, fisso);
+                partite, punteggi, prenotazioni, impostazioniRepository, entityManager, fisso);
 
         campo = new Campo(1, "Campo Centrale", true, LocalTime.of(8, 0), LocalTime.of(23, 0));
         admin = new Utente(TEL_ADMIN, "Ada", "Admin", "x", LocalDate.of(1990, 1, 1), true);
@@ -244,6 +246,21 @@ class AdminServiceTest {
                     .thenReturn(List.of(avviso(1, p)));
 
             assertThat(service.getAvvisi()).hasSize(1);
+        }
+
+        @Test
+        void partitaAlCompletoNascondeLAvvisoFinoAUnPostoRiaperto() {
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A, TEL_B, TEL_C);
+            Partecipazione posto = postoCampo();
+            p.aggiungiPartecipazione(posto);
+            when(avvisoRepository.findAperti(any(), any())).thenReturn(List.of(avviso(3, p)));
+
+            assertThat(service.getAvvisi()).isEmpty();
+
+            p.rimuoviPartecipazione(posto);
+
+            assertThat(service.getAvvisi()).extracting(AdminDTO.AvvisoResponse::getId).containsExactly(3);
+            assertThat(service.getAvvisi().get(0).getPostiLiberi()).isEqualTo(1);
         }
 
         private Avviso avviso(int id, Partita partita) {
@@ -699,16 +716,6 @@ class AdminServiceTest {
             Utente nuovo = utente(telefono, 2.0, 0);
             when(utenteRepository.findById(telefono)).thenReturn(Optional.of(nuovo));
             return nuovo;
-        }
-
-        // Come il cascade: al flush le righe nuove prendono l'id
-        private void stubIdAlFlush(Partita p) {
-            doAnswer(invocazione -> {
-                p.getPartecipazioni().stream()
-                        .filter(pa -> pa.getId() == null)
-                        .forEach(pa -> pa.setId(prossimoIdPosto++));
-                return null;
-            }).when(partitaRepository).flush();
         }
     }
 
@@ -1322,8 +1329,396 @@ class AdminServiceTest {
     }
 
     // ============================================
+    // Impostazioni
+    // ============================================
+    @Nested
+    class LivelloGiocatoriCampo {
+
+        @Test
+        void leggeIlLivello() {
+            assertThat(service.getImpostazioni().getLivelloGiocatoriCampo()).isEqualTo(1.0);
+        }
+
+        @ParameterizedTest
+        @ValueSource(doubles = { -0.5, 5.5, 2.3 })
+        void livelloNonValido(double livello) {
+            assertThatThrownBy(() -> service.modificaLivelloGiocatoriCampo(livello))
+                    .isInstanceOf(RichiestaNonValidaException.class)
+                    .hasMessage("Il livello deve essere tra 0 e 5 con passo 0,5");
+            assertThat(service.getImpostazioni().getLivelloGiocatoriCampo()).isEqualTo(1.0);
+        }
+
+        @Test
+        void livelloMancante() {
+            assertThatThrownBy(() -> service.modificaLivelloGiocatoriCampo(null))
+                    .isInstanceOf(RichiestaNonValidaException.class);
+        }
+
+        // Due utenti di livello 2 contro due posti CAMPO: con il livello campo a 1 i vincitori hanno +1, a 2,5 +3
+        @Test
+        void valeSoloPerICalcoliSuccessivi() {
+            Partita p = partita(StatoPartita.CONFERMATA, 18, TEL_A, TEL_B);
+            p.aggiungiPartecipazione(postoCampo());
+            p.aggiungiPartecipazione(postoCampo());
+            stubLock(p);
+            service.modificaRisultato(ID_PARTITA, request(p, "6-4", "6-3"), TEL_ADMIN);
+            assertPunti(p, 1, 1, null, null);
+
+            AdminDTO.ImpostazioniResponse risposta = service.modificaLivelloGiocatoriCampo(2.5);
+
+            assertThat(risposta.getLivelloGiocatoriCampo()).isEqualTo(2.5);
+            assertPunti(p, 1, 1, null, null);
+            assertThat(utenti.get(TEL_A).getPunteggio()).isEqualTo(1);
+
+            service.modificaRisultato(ID_PARTITA, request(p, "6-4", "6-3"), TEL_ADMIN);
+            assertPunti(p, 3, 3, null, null);
+        }
+    }
+
+    // ============================================
+    // Giocatori campo
+    // ============================================
+    @Nested
+    class GiocatoriCampo {
+
+        @Test
+        void aggiungeIPostiConIValoriDelVincolo() {
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A);
+            stubLock(p);
+            stubIdAlFlush(p);
+
+            PartitaDTO.DettaglioResponse risposta = service.aggiungiGiocatoriCampo(ID_PARTITA, 2);
+
+            assertThat(p.getPartecipazioni()).hasSize(3);
+            assertThat(p.getPartecipazioni().subList(1, 3)).allSatisfy(pa -> {
+                assertThat(pa.getTipo()).isEqualTo(TipoPartecipazione.CAMPO);
+                assertThat(pa.getUtente()).isNull();
+                assertThat(pa.getConfermata()).isFalse();
+                assertThat(pa.getInvitato()).isFalse();
+                assertThat(pa.getPuntiAssegnati()).isNull();
+            });
+            assertThat(risposta.getStato()).isEqualTo("creata");
+            assertThat(risposta.getPosti()).extracting(PartitaDTO.PostoResponse::getIdPosto).doesNotContainNull();
+            assertAzioniTutteFalse(risposta);
+        }
+
+        @ParameterizedTest
+        @ValueSource(ints = { -1, 0, 4 })
+        void numeroFuoriLimiti(int numero) {
+            assertThatThrownBy(() -> service.aggiungiGiocatoriCampo(ID_PARTITA, numero))
+                    .isInstanceOf(RichiestaNonValidaException.class)
+                    .hasMessage("Il numero deve essere tra 1 e 3");
+            verifyNoInteractions(partitaRepository);
+        }
+
+        @Test
+        void numeroMancante() {
+            assertThatThrownBy(() -> service.aggiungiGiocatoriCampo(ID_PARTITA, null))
+                    .isInstanceOf(RichiestaNonValidaException.class)
+                    .hasMessage("Il numero deve essere tra 1 e 3");
+        }
+
+        @Test
+        void partitaInesistente() {
+            when(partitaRepository.findByIdPerAggiornamento(ID_PARTITA)).thenReturn(Optional.empty());
+            assertThatThrownBy(() -> service.aggiungiGiocatoriCampo(ID_PARTITA, 1))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = StatoPartita.class, names = { "ANNULLATA", "GIOCATA" })
+        void statoNonModificabile(StatoPartita stato) {
+            stubLock(partita(stato, 18, TEL_A));
+            assertThatThrownBy(() -> service.aggiungiGiocatoriCampo(ID_PARTITA, 1))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Si possono modificare solo le partite non annullate e non giocate");
+        }
+
+        @Test
+        void piuDeiPostiLiberi() {
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A, TEL_B, TEL_C);
+            stubLock(p);
+            assertThatThrownBy(() -> service.aggiungiGiocatoriCampo(ID_PARTITA, 2))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Puoi aggiungere al massimo 1 giocatore del campo");
+            assertThat(p.getPartecipazioni()).hasSize(3);
+        }
+
+        @Test
+        void piuDeiPostiLiberiAlPlurale() {
+            stubLock(partita(StatoPartita.CREATA, 18, TEL_A, TEL_B));
+            assertThatThrownBy(() -> service.aggiungiGiocatoriCampo(ID_PARTITA, 3))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Puoi aggiungere al massimo 2 giocatori del campo");
+        }
+
+        @Test
+        void partitaSenzaUtenti() {
+            Partita p = partitaIn(campo, DATA, LocalTime.of(18, 0));
+            stubLock(p);
+            assertThatThrownBy(() -> service.aggiungiGiocatoriCampo(ID_PARTITA, 1))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Serve almeno un giocatore utente");
+            assertThat(p.getPartecipazioni()).isEmpty();
+        }
+
+        // RF_GC_7: mancano 6 ore all'inizio, la finestra di conferma è già chiusa
+        @Test
+        void completaEConfermaAncheDopoMenoDodiciOre() {
+            Partita p = partitaIn(campo, ADESSO.toLocalDate(), LocalTime.of(18, 0));
+            aggiungiUtenti(p, TEL_A, TEL_B, TEL_C);
+            p.getPartecipazioni().forEach(pa -> pa.setConfermata(true));
+            stubLock(p);
+
+            PartitaDTO.DettaglioResponse risposta = service.aggiungiGiocatoriCampo(ID_PARTITA, 1);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CONFERMATA);
+            assertThat(risposta.getStato()).isEqualTo("confermata");
+        }
+
+        @Test
+        void completaMaNonConfermaSeManca() {
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A, TEL_B, TEL_C);
+            p.getPartecipazioni().get(0).setConfermata(true);
+            stubLock(p);
+
+            service.aggiungiGiocatoriCampo(ID_PARTITA, 1);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+        }
+
+        @Test
+        void rimuoveIlPostoSenzaCambiareLoStato() {
+            Partita p = partita(StatoPartita.CONFERMATA, 18, TEL_A, TEL_B, TEL_C);
+            Partecipazione posto = postoCampo();
+            p.aggiungiPartecipazione(posto);
+            stubLock(p);
+
+            PartitaDTO.DettaglioResponse risposta = service.rimuoviGiocatoreCampo(ID_PARTITA, posto.getId());
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CONFERMATA);
+            assertThat(p.getPartecipazioni()).hasSize(3).doesNotContain(posto);
+            assertThat(posto.getPartita()).isNull();
+            assertThat(risposta.getPosti()).hasSize(3);
+        }
+
+        @Test
+        void rimozionePostoNonCampoOInesistente() {
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A);
+            stubLock(p);
+            Integer idUtente = p.getPartecipazioni().get(0).getId();
+
+            for (Integer idPosto : List.of(idUtente, 999)) {
+                assertThatThrownBy(() -> service.rimuoviGiocatoreCampo(ID_PARTITA, idPosto))
+                        .isInstanceOf(ResourceNotFoundException.class);
+            }
+            assertThat(p.getPartecipazioni()).hasSize(1);
+        }
+
+        @Test
+        void rimozioneInStatoNonModificabile() {
+            Partita p = partita(StatoPartita.GIOCATA, 18, TEL_A);
+            Partecipazione posto = postoCampo();
+            p.aggiungiPartecipazione(posto);
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.rimuoviGiocatoreCampo(ID_PARTITA, posto.getId()))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Si possono modificare solo le partite non annullate e non giocate");
+            assertThat(p.getPartecipazioni()).contains(posto);
+        }
+    }
+
+    // ============================================
+    // Creazione di una partita
+    // ============================================
+    @Nested
+    class CreazionePartita {
+
+        private AdminDTO.NuovaPartitaRequest richiesta(Integer giocatoriCampo, String... telefoni) {
+            AdminDTO.NuovaPartitaRequest r = new AdminDTO.NuovaPartitaRequest();
+            r.setIdCampo(1);
+            r.setDataPartita(DATA);
+            r.setOraInizio(LocalTime.of(18, 0));
+            r.setTipo("PUBBLICA");
+            r.setTelefoni(Arrays.asList(telefoni));
+            r.setGiocatoriCampo(giocatoriCampo);
+            return r;
+        }
+
+        private void stubCampo() {
+            when(campoRepository.findById(1)).thenReturn(Optional.of(campo));
+        }
+
+        private void stubUtenti(String... telefoni) {
+            for (String telefono : telefoni) {
+                when(utenteRepository.findById(telefono)).thenReturn(Optional.of(utente(telefono, 2.0, 0)));
+            }
+        }
+
+        // Come il persist con IDENTITY: partita e posti prendono subito l'id
+        private void stubSalvataggio() {
+            when(partitaRepository.save(any(Partita.class))).thenAnswer(invocazione -> {
+                Partita p = invocazione.getArgument(0);
+                p.setId(ID_PARTITA);
+                p.getPartecipazioni().forEach(pa -> pa.setId(prossimoIdPosto++));
+                return p;
+            });
+        }
+
+        private void assertNonValida(AdminDTO.NuovaPartitaRequest r, String messaggio) {
+            assertThatThrownBy(() -> service.creaPartita(r, TEL_ADMIN))
+                    .isInstanceOf(RichiestaNonValidaException.class)
+                    .hasMessage(messaggio);
+            verifyNoInteractions(partitaRepository);
+        }
+
+        @Test
+        void ilCreatoreEAdminENonOccupaUnPosto() {
+            stubCampo();
+            stubUtenti(TEL_A, TEL_B);
+            stubSalvataggio();
+
+            PartitaDTO.DettaglioResponse risposta = service.creaPartita(richiesta(1, TEL_B, TEL_A), TEL_ADMIN);
+
+            assertThat(risposta.getStato()).isEqualTo("creata");
+            assertThat(risposta.getTipo()).isEqualTo("PUBBLICA");
+            assertThat(risposta.getTelefonoCreatore()).isEqualTo(TEL_ADMIN);
+            assertThat(risposta.getOraFine()).isEqualTo(LocalTime.of(19, 30));
+            // Gli INSERT sono in ordine di telefono, anche se la richiesta ha un altro ordine
+            assertThat(risposta.getPosti()).extracting(PartitaDTO.PostoResponse::getTelefono)
+                    .containsExactly(TEL_A, TEL_B, null);
+            assertThat(risposta.getPosti()).extracting(PartitaDTO.PostoResponse::getTipo)
+                    .containsExactly("UTENTE", "UTENTE", "CAMPO");
+            assertThat(risposta.getPosti()).extracting(PartitaDTO.PostoResponse::getConfermata)
+                    .containsOnly(false);
+            assertAzioniTutteFalse(risposta);
+        }
+
+        @Test
+        void quattroPostiRestanoCreataEGiocatoriCampoFacoltativo() {
+            stubCampo();
+            stubUtenti(TEL_A, TEL_B, TEL_C, TEL_D);
+            stubSalvataggio();
+
+            PartitaDTO.DettaglioResponse risposta =
+                    service.creaPartita(richiesta(null, TEL_A, TEL_B, TEL_C, TEL_D), TEL_ADMIN);
+
+            assertThat(risposta.getStato()).isEqualTo("creata");
+            assertThat(risposta.getPosti()).hasSize(4);
+        }
+
+        @Test
+        void regoleSuiPosti() {
+            assertNonValida(richiesta(0), "Almeno un giocatore deve essere un utente");
+            AdminDTO.NuovaPartitaRequest senzaElenco = richiesta(0);
+            senzaElenco.setTelefoni(null);
+            assertNonValida(senzaElenco, "Almeno un giocatore deve essere un utente");
+            assertNonValida(richiesta(4, TEL_A), "Una partita può avere al massimo 4 giocatori");
+            assertNonValida(richiesta(Integer.MAX_VALUE, TEL_A), "Una partita può avere al massimo 4 giocatori");
+            assertNonValida(richiesta(0, TEL_A, TEL_B, TEL_C, TEL_D, TEL_E), "Una partita può avere al massimo 4 giocatori");
+            assertNonValida(richiesta(2, TEL_A, TEL_B, TEL_C), "Una partita può avere al massimo 4 giocatori");
+            assertNonValida(richiesta(0, TEL_A, TEL_A), "L'elenco dei partecipanti contiene telefoni duplicati");
+            assertNonValida(richiesta(-1, TEL_A), "Il numero di giocatori del campo non può essere negativo");
+        }
+
+        @Test
+        void campiMancantiOTipoSbagliato() {
+            AdminDTO.NuovaPartitaRequest r = richiesta(0, TEL_A);
+            r.setIdCampo(null);
+            assertNonValida(r, "Il campo è obbligatorio");
+            r = richiesta(0, TEL_A);
+            r.setDataPartita(null);
+            assertNonValida(r, "La data è obbligatoria");
+            r = richiesta(0, TEL_A);
+            r.setOraInizio(null);
+            assertNonValida(r, "L'ora di inizio è obbligatoria");
+            r = richiesta(0, TEL_A);
+            r.setTipo(null);
+            assertNonValida(r, "Il tipo è obbligatorio");
+            r = richiesta(0, TEL_A);
+            r.setTipo("pubblica");
+            assertNonValida(r, "Il tipo deve essere PUBBLICA o PRIVATA");
+        }
+
+        @Test
+        void campoInesistente() {
+            when(campoRepository.findById(1)).thenReturn(Optional.empty());
+            assertThatThrownBy(() -> service.creaPartita(richiesta(0, TEL_A), TEL_ADMIN))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Campo non trovato con id 1");
+        }
+
+        @Test
+        void utenteInesistenteOAdmin() {
+            stubCampo();
+            when(utenteRepository.findById(TEL_A)).thenReturn(Optional.empty());
+            when(utenteRepository.findById(TEL_ADMIN)).thenReturn(Optional.of(admin));
+
+            assertThatThrownBy(() -> service.creaPartita(richiesta(0, TEL_A), TEL_ADMIN))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Utente non trovato");
+            assertThatThrownBy(() -> service.creaPartita(richiesta(0, TEL_ADMIN), TEL_ADMIN))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Un amministratore non può partecipare");
+            verify(partitaRepository, never()).save(any());
+        }
+
+        @Test
+        void slotOccupatoPerSovrapposizione() {
+            stubCampo();
+            when(partitaRepository.findByCampoIdAndDataPartitaAndStatoNot(1, DATA, StatoPartita.ANNULLATA))
+                    .thenReturn(List.of(partitaIn(campo, DATA, LocalTime.of(17, 30))));
+
+            assertThatThrownBy(() -> service.creaPartita(richiesta(0, TEL_A), TEL_ADMIN))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Lo slot selezionato è già stato prenotato");
+            verify(partitaRepository, never()).save(any());
+        }
+
+        @Test
+        void slotPresoInParalleloDalVincoloUnico() {
+            stubCampo();
+            stubUtenti(TEL_A);
+            when(partitaRepository.save(any(Partita.class))).thenThrow(new DataIntegrityViolationException(
+                    "Duplicate entry for key 'partita.uk_partita_slot'"));
+
+            assertThatThrownBy(() -> service.creaPartita(richiesta(0, TEL_A), TEL_ADMIN))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Lo slot selezionato è già stato prenotato");
+        }
+
+        @Test
+        void fuoriOrarioENelPassato() {
+            stubCampo();
+            AdminDTO.NuovaPartitaRequest fuoriOrario = richiesta(0, TEL_A);
+            fuoriOrario.setOraInizio(LocalTime.of(22, 0));
+            AdminDTO.NuovaPartitaRequest passata = richiesta(0, TEL_A);
+            passata.setDataPartita(ADESSO.toLocalDate().minusDays(1));
+
+            assertThatThrownBy(() -> service.creaPartita(fuoriOrario, TEL_ADMIN))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("L'orario richiesto è fuori dalla fascia di apertura del campo");
+            assertThatThrownBy(() -> service.creaPartita(passata, TEL_ADMIN))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Non è possibile prenotare uno slot nel passato");
+        }
+    }
+
+    // ============================================
     // Helper
     // ============================================
+
+    // Come il cascade: al flush le righe nuove prendono l'id
+    private void stubIdAlFlush(Partita p) {
+        doAnswer(invocazione -> {
+            p.getPartecipazioni().stream()
+                    .filter(pa -> pa.getId() == null)
+                    .forEach(pa -> pa.setId(prossimoIdPosto++));
+            return null;
+        }).when(partitaRepository).flush();
+    }
 
     private void stubLock(Partita p) {
         when(partitaRepository.findByIdPerAggiornamento(ID_PARTITA)).thenReturn(Optional.of(p));

@@ -136,6 +136,50 @@ public class AdminDTO {
         public void setTelefoni(List<String> value) { this.telefoni = value; }
     }
 
+    // Risposta di GET /api/admin/impostazioni e PUT /api/admin/impostazioni/livello-giocatori-campo.
+    // Il body del PUT è LivelloRequest
+    public static class ImpostazioniResponse {
+        private Double livelloGiocatoriCampo;
+        public ImpostazioniResponse() { }
+        public ImpostazioniResponse(Double livelloGiocatoriCampo) { this.livelloGiocatoriCampo = livelloGiocatoriCampo; }
+        public Double getLivelloGiocatoriCampo() { return livelloGiocatoriCampo; }
+        public void setLivelloGiocatoriCampo(Double value) { this.livelloGiocatoriCampo = value; }
+    }
+
+    // Body di POST /api/admin/partite/{id}/giocatori-campo
+    public static class GiocatoriCampoRequest {
+        private Integer numero;
+        public GiocatoriCampoRequest() { }
+        public GiocatoriCampoRequest(Integer numero) { this.numero = numero; }
+        public Integer getNumero() { return numero; }
+        public void setNumero(Integer value) { this.numero = value; }
+    }
+
+    // Body di POST /api/admin/partite. Il creatore è l'admin del token e non occupa un posto
+    public static class NuovaPartitaRequest {
+        private Integer idCampo;
+        private LocalDate dataPartita;
+        private LocalTime oraInizio;
+        // Stringa e non enum, così un valore errato dà 400 con messaggio, come in PrenotazioneDTO.CreateRequest
+        private String tipo;
+        private List<String> telefoni;
+        // Facoltativo: se manca vale 0
+        private Integer giocatoriCampo;
+        public NuovaPartitaRequest() { }
+        public Integer getIdCampo() { return idCampo; }
+        public void setIdCampo(Integer value) { this.idCampo = value; }
+        public LocalDate getDataPartita() { return dataPartita; }
+        public void setDataPartita(LocalDate value) { this.dataPartita = value; }
+        public LocalTime getOraInizio() { return oraInizio; }
+        public void setOraInizio(LocalTime value) { this.oraInizio = value; }
+        public String getTipo() { return tipo; }
+        public void setTipo(String value) { this.tipo = value; }
+        public List<String> getTelefoni() { return telefoni; }
+        public void setTelefoni(List<String> value) { this.telefoni = value; }
+        public Integer getGiocatoriCampo() { return giocatoriCampo; }
+        public void setGiocatoriCampo(Integer value) { this.giocatoriCampo = value; }
+    }
+
     // Body di PUT /api/admin/partite/{id}/stato: creata, confermata, annullata o giocata
     public static class StatoRequest {
         private String stato;

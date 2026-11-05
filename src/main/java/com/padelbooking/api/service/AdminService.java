@@ -7,13 +7,16 @@ import com.padelbooking.api.exception.ResourceNotFoundException;
 import com.padelbooking.api.exception.RichiestaNonValidaException;
 import com.padelbooking.api.model.Avviso;
 import com.padelbooking.api.model.Campo;
+import com.padelbooking.api.model.Impostazioni;
 import com.padelbooking.api.model.Partecipazione;
 import com.padelbooking.api.model.Partita;
 import com.padelbooking.api.model.StatoPartita;
 import com.padelbooking.api.model.TipoPartecipazione;
+import com.padelbooking.api.model.TipoPartita;
 import com.padelbooking.api.model.Utente;
 import com.padelbooking.api.repository.AvvisoRepository;
 import com.padelbooking.api.repository.CampoRepository;
+import com.padelbooking.api.repository.ImpostazioniRepository;
 import com.padelbooking.api.repository.PartitaRepository;
 import com.padelbooking.api.repository.UtenteRepository;
 import jakarta.persistence.EntityManager;
@@ -36,7 +39,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-// Area amministratore (UC_GA_1–6, UC_GU_3): le regole dei giocatori non valgono, in particolare i limiti
+// Area amministratore (UC_GA_1–7, UC_GU_3): le regole dei giocatori non valgono, in particolare i limiti
 // di tempo. L'accesso riservato all'admin sta in SecurityConfig. Le scritture sulla partita leggono con il
 // lock come prima lettura della transazione, per il motivo spiegato in PartitaService.entra.
 @Service
@@ -49,6 +52,10 @@ public class AdminService {
     private static final double LIVELLO_MIN = 0.0;
     private static final double LIVELLO_MAX = 5.0;
     private static final double PASSI_PER_LIVELLO = 2.0;
+
+    // Quanti giocatori campo si possono aggiungere con una richiesta: un posto è sempre di un utente
+    private static final int GIOCATORI_CAMPO_MIN = 1;
+    private static final int GIOCATORI_CAMPO_MAX = 3;
 
     // Una partita iniziata non ha più un avviso aperto. L'inizio effettivo cade al più il giorno dopo
     // data_partita, quindi una partita non ancora iniziata ha data_partita da ieri in poi
@@ -73,6 +80,15 @@ public class AdminService {
     private static final String MESSAGGIO_STATO_NON_VALIDO = "Stato non valido";
     private static final String MESSAGGIO_SLOT_OCCUPATO = "Lo slot è già occupato da un'altra partita";
     private static final String MESSAGGIO_GIA_ANNULLATA = "La partita è già annullata";
+    private static final String MESSAGGIO_NUMERO_NON_VALIDO = "Il numero deve essere tra 1 e 3";
+    private static final String MESSAGGIO_SERVE_UN_UTENTE = "Serve almeno un giocatore utente";
+    private static final String MESSAGGIO_POSTO_NON_TROVATO = "Giocatore del campo non trovato";
+    private static final String MESSAGGIO_GIOCATORI_CAMPO_NEGATIVI = "Il numero di giocatori del campo non può essere negativo";
+    private static final String MESSAGGIO_CAMPO_OBBLIGATORIO = "Il campo è obbligatorio";
+    private static final String MESSAGGIO_DATA_OBBLIGATORIA = "La data è obbligatoria";
+    private static final String MESSAGGIO_ORA_OBBLIGATORIA = "L'ora di inizio è obbligatoria";
+    private static final String MESSAGGIO_TIPO_OBBLIGATORIO = "Il tipo è obbligatorio";
+    private static final String MESSAGGIO_TIPO_NON_VALIDO = "Il tipo deve essere PUBBLICA o PRIVATA";
 
     private final PartitaRepository partitaRepository;
     private final CampoRepository campoRepository;
@@ -80,6 +96,8 @@ public class AdminService {
     private final UtenteRepository utenteRepository;
     private final PartitaService partitaService;
     private final PunteggiService punteggiService;
+    private final PrenotazioneService prenotazioneService;
+    private final ImpostazioniRepository impostazioniRepository;
     private final EntityManager entityManager;
     private final Clock clock;
 
@@ -89,6 +107,8 @@ public class AdminService {
                         UtenteRepository utenteRepository,
                         PartitaService partitaService,
                         PunteggiService punteggiService,
+                        PrenotazioneService prenotazioneService,
+                        ImpostazioniRepository impostazioniRepository,
                         EntityManager entityManager,
                         Clock clock) {
         this.partitaRepository = partitaRepository;
@@ -97,6 +117,8 @@ public class AdminService {
         this.utenteRepository = utenteRepository;
         this.partitaService = partitaService;
         this.punteggiService = punteggiService;
+        this.prenotazioneService = prenotazioneService;
+        this.impostazioniRepository = impostazioniRepository;
         this.entityManager = entityManager;
         this.clock = clock;
     }
@@ -122,12 +144,15 @@ public class AdminService {
     // ============================================
     // UC_GA_6, RF_GA_7–9: l'avviso resta fino all'ora di inizio. Il filtro preciso e l'ordinamento si fanno
     // sull'inizio effettivo, come nella bacheca pubbliche, per le partite dopo mezzanotte.
+    // Una partita con tutti i posti occupati non ha bisogno dell'avviso. La riga però resta: se si riapre un
+    // posto l'avviso torna visibile, e lo scheduler non ne crea un altro (vincolo uk_avviso).
     @Transactional(readOnly = true)
     public List<AdminDTO.AvvisoResponse> getAvvisi() {
         LocalDateTime adesso = LocalDateTime.now(clock);
         return avvisoRepository.findAperti(StatoPartita.ANNULLATA, adesso.toLocalDate().minusDays(GIORNI_INDIETRO_AVVISI))
                 .stream()
                 .filter(a -> !RegoleTempoPartita.iniziata(a.getPartita(), adesso))
+                .filter(a -> !RegoleConfermaPartita.alCompleto(a.getPartita()))
                 .sorted(Comparator.comparing((Avviso a) -> RegoleTempoPartita.inizioEffettivo(a.getPartita()))
                         .thenComparing(Avviso::getId))
                 .map(this::toAvvisoResponse)
@@ -184,10 +209,8 @@ public class AdminService {
         }
 
         Partita partita = trovaConLockOLancia(idPartita);
+        verificaPostiModificabili(partita);
         StatoPartita stato = partita.getStato();
-        if (stato == StatoPartita.ANNULLATA || stato == StatoPartita.GIOCATA) {
-            throw new BusinessRuleException(MESSAGGIO_PARTECIPANTI_NON_MODIFICABILI);
-        }
         long postiCampo = partita.getPartecipazioni().stream()
                 .filter(pa -> pa.getTipo() == TipoPartecipazione.CAMPO)
                 .count();
@@ -330,6 +353,113 @@ public class AdminService {
     }
 
     // ============================================
+    // Impostazioni
+    // ============================================
+    @Transactional(readOnly = true)
+    public AdminDTO.ImpostazioniResponse getImpostazioni() {
+        return new AdminDTO.ImpostazioniResponse(trovaImpostazioni().getLivelloGiocatoriCampo());
+    }
+
+    // RF_GA_14–15: vale per i calcoli successivi. I punti già assegnati non si ricalcolano, e uno storno
+    // toglie quello che è scritto in punti_assegnati, indipendentemente dal livello di adesso.
+    @Transactional
+    public AdminDTO.ImpostazioniResponse modificaLivelloGiocatoriCampo(Double livello) {
+        if (!livelloValido(livello)) {
+            throw new RichiestaNonValidaException(MESSAGGIO_LIVELLO_NON_VALIDO);
+        }
+        Impostazioni impostazioni = trovaImpostazioni();
+        impostazioni.setLivelloGiocatoriCampo(livello);
+        return new AdminDTO.ImpostazioniResponse(livello);
+    }
+
+    // ============================================
+    // Giocatori campo
+    // ============================================
+    // UC_GA_7, RF_GA_10–13, RF_GC_5, RF_GC_7: senza limiti di tempo, quindi la partita può completarsi e
+    // passare a CONFERMATA anche dopo le −12 h, se tutti gli utenti avevano già confermato.
+    @Transactional
+    public PartitaDTO.DettaglioResponse aggiungiGiocatoriCampo(Integer idPartita, Integer numero) {
+        if (numero == null || numero < GIOCATORI_CAMPO_MIN || numero > GIOCATORI_CAMPO_MAX) {
+            throw new RichiestaNonValidaException(MESSAGGIO_NUMERO_NON_VALIDO);
+        }
+
+        Partita partita = trovaConLockOLancia(idPartita);
+        verificaPostiModificabili(partita);
+        int postiLiberi = POSTI_MAX - partita.getPartecipazioni().size();
+        if (numero > postiLiberi) {
+            throw new BusinessRuleException("Puoi aggiungere al massimo " + postiLiberi
+                    + (postiLiberi == 1 ? " giocatore del campo" : " giocatori del campo"));
+        }
+        if (!RegoleConfermaPartita.haGiocatoriUtente(partita)) {
+            throw new BusinessRuleException(MESSAGGIO_SERVE_UN_UTENTE);
+        }
+
+        aggiungiPostiCampo(partita, numero);
+
+        // RF_GC_7
+        if (RegoleConfermaPartita.confermaSeCompleta(partita)) {
+            // T13: notifica ADMIN_CONFERMA all'amministratore (RF_GN_8)
+        }
+
+        // Come in modificaPartecipanti: il flush assegna gli id ai nuovi posti, che vanno nella risposta
+        partitaRepository.flush();
+
+        return partitaService.dettaglioPerAdmin(partita);
+    }
+
+    // RF_GA_3: lo stato non cambia. Se una CONFERMATA resta sotto i 4 posti, all'inizio la annulla lo
+    // scheduler (RF_GC_10). Gli utenti restano tutti, quindi resta anche il giocatore utente obbligatorio.
+    @Transactional
+    public PartitaDTO.DettaglioResponse rimuoviGiocatoreCampo(Integer idPartita, Integer idPosto) {
+        Partita partita = trovaConLockOLancia(idPartita);
+        verificaPostiModificabili(partita);
+        Partecipazione posto = partita.getPartecipazioni().stream()
+                .filter(pa -> pa.getTipo() == TipoPartecipazione.CAMPO && pa.getId().equals(idPosto))
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException(MESSAGGIO_POSTO_NON_TROVATO));
+
+        partita.rimuoviPartecipazione(posto);
+
+        return partitaService.dettaglioPerAdmin(partita);
+    }
+
+    // ============================================
+    // Creazione di una partita
+    // ============================================
+    // L'admin è il creatore ma non un giocatore: non occupa un posto, e se vuole giocare inserisce un
+    // giocatore campo. Le regole di slot sono quelle di POST /api/prenotazioni e stanno in PrenotazioneService.
+    // Lo stato è CREATA anche con 4 posti: gli utenti aggiunti non hanno ancora confermato.
+    @Transactional
+    public PartitaDTO.DettaglioResponse creaPartita(AdminDTO.NuovaPartitaRequest request, String telefonoAdmin) {
+        TipoPartita tipo = validaNuovaPartita(request);
+        int giocatoriCampo = request.getGiocatoriCampo() == null ? 0 : request.getGiocatoriCampo();
+
+        Partita partita = prenotazioneService.nuovaPartitaSuSlot(request.getIdCampo(), request.getDataPartita(),
+                request.getOraInizio());
+
+        List<Utente> giocatori = new ArrayList<>();
+        for (String telefono : request.getTelefoni()) {
+            giocatori.add(trovaPartecipanteOLancia(telefono));
+        }
+        // Stessa regola di modificaPartecipanti: gli INSERT prendono il lock sulla riga utente in ordine di telefono
+        giocatori.sort(Comparator.comparing(Utente::getTelefono));
+
+        // L'admin ha autenticato la richiesta, quindi esiste: basta il riferimento per la chiave esterna
+        partita.setCreatore(utenteRepository.getReferenceById(telefonoAdmin));
+        partita.setTipo(tipo);
+        for (Utente giocatore : giocatori) {
+            partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, giocatore, false, false));
+        }
+        aggiungiPostiCampo(partita, giocatoriCampo);
+
+        Partita salvata = prenotazioneService.salvaNuovaPartita(partita);
+
+        // T13: notifiche ai giocatori aggiunti dall'admin
+
+        return partitaService.dettaglioPerAdmin(salvata);
+    }
+
+    // ============================================
     // Helper privati
     // ============================================
 
@@ -346,6 +476,71 @@ public class AdminService {
             throw new BusinessRuleException(MESSAGGIO_ADMIN_NON_PARTECIPA);
         }
         return utente;
+    }
+
+    // Restituisce il tipo già convertito. I posti si contano qui: con almeno un utente, più di 3 giocatori
+    // campo superano sempre i 4 posti, quindi basta il messaggio generale.
+    private TipoPartita validaNuovaPartita(AdminDTO.NuovaPartitaRequest request) {
+        if (request.getIdCampo() == null) {
+            throw new RichiestaNonValidaException(MESSAGGIO_CAMPO_OBBLIGATORIO);
+        }
+        if (request.getDataPartita() == null) {
+            throw new RichiestaNonValidaException(MESSAGGIO_DATA_OBBLIGATORIA);
+        }
+        if (request.getOraInizio() == null) {
+            throw new RichiestaNonValidaException(MESSAGGIO_ORA_OBBLIGATORIA);
+        }
+        TipoPartita tipo = tipoDaRichiesta(request.getTipo());
+
+        List<String> telefoni = request.getTelefoni();
+        if (telefoni == null || telefoni.isEmpty()) {
+            throw new RichiestaNonValidaException(MESSAGGIO_ALMENO_UN_UTENTE);
+        }
+        if (new LinkedHashSet<>(telefoni).size() != telefoni.size()) {
+            throw new RichiestaNonValidaException(MESSAGGIO_TELEFONI_DUPLICATI);
+        }
+        int giocatoriCampo = request.getGiocatoriCampo() == null ? 0 : request.getGiocatoriCampo();
+        if (giocatoriCampo < 0) {
+            throw new RichiestaNonValidaException(MESSAGGIO_GIOCATORI_CAMPO_NEGATIVI);
+        }
+        // long: la somma non deve poter traboccare con un valore enorme nel JSON
+        if ((long) telefoni.size() + giocatoriCampo > POSTI_MAX) {
+            throw new RichiestaNonValidaException(MESSAGGIO_MASSIMO_GIOCATORI);
+        }
+        return tipo;
+    }
+
+    private TipoPartita tipoDaRichiesta(String tipo) {
+        if (tipo == null || tipo.isBlank()) {
+            throw new RichiestaNonValidaException(MESSAGGIO_TIPO_OBBLIGATORIO);
+        }
+        for (TipoPartita valore : TipoPartita.values()) {
+            if (valore.name().equals(tipo)) {
+                return valore;
+            }
+        }
+        throw new RichiestaNonValidaException(MESSAGGIO_TIPO_NON_VALIDO);
+    }
+
+    private void verificaPostiModificabili(Partita partita) {
+        StatoPartita stato = partita.getStato();
+        if (stato == StatoPartita.ANNULLATA || stato == StatoPartita.GIOCATA) {
+            throw new BusinessRuleException(MESSAGGIO_PARTECIPANTI_NON_MODIFICABILI);
+        }
+    }
+
+    // Il vincolo ck_partecipazione_tipo impone per i posti CAMPO: niente telefono, non invitato, non confermato
+    private void aggiungiPostiCampo(Partita partita, int numero) {
+        for (int i = 0; i < numero; i++) {
+            partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+        }
+    }
+
+    // Senza la riga, creata dallo script SQL, il database non è quello atteso: come in PunteggiService
+    private Impostazioni trovaImpostazioni() {
+        return impostazioniRepository.findById(PunteggiService.ID_IMPOSTAZIONI)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Riga " + PunteggiService.ID_IMPOSTAZIONI + " di impostazioni mancante"));
     }
 
     private boolean livelloValido(Double livello) {

@@ -5,6 +5,7 @@ import com.padelbooking.api.dto.PartitaDTO;
 import com.padelbooking.api.security.UtentePrincipal;
 import com.padelbooking.api.service.AdminService;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -12,7 +13,7 @@ import org.springframework.web.bind.annotation.*;
 import java.time.LocalDate;
 import java.util.List;
 
-// Area amministratore: partite del giorno, avvisi, livelli degli utenti e correzioni sulle partite.
+// Area amministratore: partite del giorno, avvisi, livelli, impostazioni, creazione e correzioni delle partite.
 // L'accesso riservato all'admin sta in SecurityConfig, su tutto /api/admin/**.
 // Niente @Valid: i dati li controlla il service (vedi AdminDTO)
 @RestController
@@ -87,5 +88,44 @@ public class AdminController {
     @PostMapping("/partite/{id}/annulla")
     public ResponseEntity<PartitaDTO.DettaglioResponse> annulla(@PathVariable Integer id) {
         return ResponseEntity.ok(adminService.annulla(id));
+    }
+
+    // GET /api/admin/impostazioni
+    @GetMapping("/impostazioni")
+    public ResponseEntity<AdminDTO.ImpostazioniResponse> getImpostazioni() {
+        return ResponseEntity.ok(adminService.getImpostazioni());
+    }
+
+    // PUT /api/admin/impostazioni/livello-giocatori-campo  { "livello": 2.5 }
+    @PutMapping("/impostazioni/livello-giocatori-campo")
+    public ResponseEntity<AdminDTO.ImpostazioniResponse> modificaLivelloGiocatoriCampo(
+            @RequestBody AdminDTO.LivelloRequest request) {
+        return ResponseEntity.ok(adminService.modificaLivelloGiocatoriCampo(request.getLivello()));
+    }
+
+    // POST /api/admin/partite/7/giocatori-campo  { "numero": 2 }
+    @PostMapping("/partite/{id}/giocatori-campo")
+    public ResponseEntity<PartitaDTO.DettaglioResponse> aggiungiGiocatoriCampo(
+            @PathVariable Integer id,
+            @RequestBody AdminDTO.GiocatoriCampoRequest request) {
+        return ResponseEntity.ok(adminService.aggiungiGiocatoriCampo(id, request.getNumero()));
+    }
+
+    // DELETE /api/admin/partite/7/giocatori-campo/12
+    @DeleteMapping("/partite/{id}/giocatori-campo/{idPosto}")
+    public ResponseEntity<PartitaDTO.DettaglioResponse> rimuoviGiocatoreCampo(@PathVariable Integer id,
+                                                                              @PathVariable Integer idPosto) {
+        return ResponseEntity.ok(adminService.rimuoviGiocatoreCampo(id, idPosto));
+    }
+
+    // Creazione da zero: il creatore è l'admin del token, che non occupa un posto
+    // POST /api/admin/partite  { "idCampo": 1, "dataPartita": "2026-11-05", "oraInizio": "18:00", "tipo": "PUBBLICA",
+    //                            "telefoni": ["3330000001"], "giocatoriCampo": 1 }
+    @PostMapping("/partite")
+    public ResponseEntity<PartitaDTO.DettaglioResponse> creaPartita(
+            @RequestBody AdminDTO.NuovaPartitaRequest request,
+            @AuthenticationPrincipal UtentePrincipal principal) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(adminService.creaPartita(request, principal.getTelefono()));
     }
 }
