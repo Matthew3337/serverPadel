@@ -462,7 +462,7 @@ class AdminControllerTest {
     private static PartitaDTO.DettaglioResponse dettaglio(String stato) {
         return new PartitaDTO.DettaglioResponse(7, 1, "Campo", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0),
                 LocalTime.of(19, 30), stato, "PUBBLICA", TEL_UTENTE, List.of(),
-                new PartitaDTO.AzioniResponse(false, false, false, false, false), null);
+                new PartitaDTO.AzioniResponse(false, false, false, false, false, false), null);
     }
 
     private static UtentePrincipal principal(String telefono, boolean admin) {

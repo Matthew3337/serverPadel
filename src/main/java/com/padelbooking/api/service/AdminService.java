@@ -210,7 +210,6 @@ public class AdminService {
 
         Partita partita = trovaConLockOLancia(idPartita);
         verificaPostiModificabili(partita);
-        StatoPartita stato = partita.getStato();
         long postiCampo = partita.getPartecipazioni().stream()
                 .filter(pa -> pa.getTipo() == TipoPartecipazione.CAMPO)
                 .count();
@@ -246,10 +245,11 @@ public class AdminService {
                 partita.rimuoviPartecipazione(posto);
             }
         }
+        // In una partita già confermata nessuno deve più confermare, e da −12 h non si potrebbe più (D2):
+        // in entrambi i casi i nuovi entrano confermati. Si calcola prima di aggiungerli, sullo stato di adesso
+        boolean confermata = RegoleConfermaPartita.confermataAllIngresso(partita, LocalDateTime.now(clock));
         for (Utente utente : nuovi) {
-            // In una partita già confermata nessuno deve più confermare
-            partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, utente, false,
-                    stato == StatoPartita.CONFERMATA));
+            partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, utente, false, confermata));
         }
 
         // RF_GC_7
@@ -427,8 +427,10 @@ public class AdminService {
     // Creazione di una partita
     // ============================================
     // L'admin è il creatore ma non un giocatore: non occupa un posto, e se vuole giocare inserisce un
-    // giocatore campo. Le regole di slot sono quelle di POST /api/prenotazioni e stanno in PrenotazioneService.
-    // Lo stato è CREATA anche con 4 posti: gli utenti aggiunti non hanno ancora confermato.
+    // giocatore campo. Le regole di slot, compreso il limite dei 15 giorni, sono quelle di POST /api/prenotazioni
+    // e stanno in PrenotazioneService. Lo stato è CREATA anche con 4 posti, perché gli utenti aggiunti devono
+    // ancora confermare, tranne a meno di 12 ore dall'inizio (D2): lì nascono confermati e con 4 posti la
+    // partita nasce CONFERMATA.
     @Transactional
     public PartitaDTO.DettaglioResponse creaPartita(AdminDTO.NuovaPartitaRequest request, String telefonoAdmin) {
         TipoPartita tipo = validaNuovaPartita(request);
@@ -447,10 +449,16 @@ public class AdminService {
         // L'admin ha autenticato la richiesta, quindi esiste: basta il riferimento per la chiave esterna
         partita.setCreatore(utenteRepository.getReferenceById(telefonoAdmin));
         partita.setTipo(tipo);
+        boolean confermata = RegoleConfermaPartita.confermataAllIngresso(partita, LocalDateTime.now(clock));
         for (Utente giocatore : giocatori) {
-            partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, giocatore, false, false));
+            partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, giocatore, false, confermata));
         }
         aggiungiPostiCampo(partita, giocatoriCampo);
+
+        // RF_GC_7
+        if (RegoleConfermaPartita.confermaSeCompleta(partita)) {
+            // T13: notifica ADMIN_CONFERMA all'amministratore (RF_GN_8)
+        }
 
         Partita salvata = prenotazioneService.salvaNuovaPartita(partita);
 

@@ -31,7 +31,7 @@ public class PartitaController {
         return ResponseEntity.ok(partitaService.getBachecaPubbliche(principal.getTelefono(), isAdmin));
     }
 
-    // Storico delle partite non annullate dell'utente autenticato, dalla più recente.
+    // Storico delle partite non annullate e già finite dell'utente autenticato, dalla più recente.
     // Come "pubbliche", il path letterale ha la precedenza su /{id}
     // GET /api/partite/storico
     @GetMapping("/storico")
@@ -39,6 +39,16 @@ public class PartitaController {
             @AuthenticationPrincipal UtentePrincipal principal) {
         boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
         return ResponseEntity.ok(partitaService.getStorico(principal.getTelefono(), isAdmin));
+    }
+
+    // Le mie partite: quelle non annullate e non ancora finite dell'utente autenticato, dalla più vicina.
+    // Come "pubbliche", il path letterale ha la precedenza su /{id}
+    // GET /api/partite/mie
+    @GetMapping("/mie")
+    public ResponseEntity<List<PartitaDTO.StoricoResponse>> getMiePartite(
+            @AuthenticationPrincipal UtentePrincipal principal) {
+        boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
+        return ResponseEntity.ok(partitaService.getMiePartite(principal.getTelefono(), isAdmin));
     }
 
     // Bacheca inviti: le partite creata o confermata in cui l'utente autenticato è stato invitato.
@@ -128,5 +138,16 @@ public class PartitaController {
                                                                @AuthenticationPrincipal UtentePrincipal principal) {
         boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
         return ResponseEntity.ok(partitaService.invita(id, request.getTelefono(), principal.getTelefono(), isAdmin));
+    }
+
+    // Cambio di visibilità da parte del creatore: restituisce il dettaglio aggiornato.
+    // Niente @Valid: il tipo lo controlla il service (vedi PartitaDTO.TipoRequest)
+    // PUT /api/partite/7/tipo  { "tipo": "PRIVATA" }
+    @PutMapping("/{id}/tipo")
+    public ResponseEntity<PartitaDTO.DettaglioResponse> cambiaTipo(@PathVariable Integer id,
+                                                                   @RequestBody PartitaDTO.TipoRequest request,
+                                                                   @AuthenticationPrincipal UtentePrincipal principal) {
+        boolean isAdmin = Boolean.TRUE.equals(principal.getUtente().getIsAdmin());
+        return ResponseEntity.ok(partitaService.cambiaTipo(id, request.getTipo(), principal.getTelefono(), isAdmin));
     }
 }

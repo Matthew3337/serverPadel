@@ -3,6 +3,7 @@ package com.padelbooking.api.service;
 import com.padelbooking.api.dto.PrenotazioneDTO;
 import com.padelbooking.api.exception.BusinessRuleException;
 import com.padelbooking.api.exception.ResourceNotFoundException;
+import com.padelbooking.api.exception.RichiestaNonValidaException;
 import com.padelbooking.api.model.Campo;
 import com.padelbooking.api.model.Partecipazione;
 import com.padelbooking.api.model.Partita;
@@ -22,8 +23,10 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 @Service
 public class PrenotazioneService {
@@ -37,6 +40,21 @@ public class PrenotazioneService {
     private static final String VINCOLO_SLOT_UNICO = "uk_partita_slot";
 
     private static final String MESSAGGIO_SLOT_OCCUPATO = "Lo slot selezionato è già stato prenotato";
+
+    // R9, D6: il limite in giorni sta in RegoleTempoPartita, condiviso con le partite create dall'admin
+    private static final String MESSAGGIO_OLTRE_LIMITE_PRENOTAZIONE =
+            "Si può prenotare al massimo " + RegoleTempoPartita.getGiorniPrenotazioneMax() + " giorni in anticipo";
+
+    // R11: con il creatore restano al massimo 3 posti da assegnare agli invitati
+    private static final int INVITATI_MAX = RegoleConfermaPartita.getPostiMax() - 1;
+
+    // Messaggi degli invitati alla prenotazione (RNF_U_3): 404 e 409 sono gli stessi di POST /api/partite/{id}/inviti
+    private static final String MESSAGGIO_TROPPI_INVITATI = "Si possono invitare al massimo " + INVITATI_MAX + " utenti";
+    private static final String MESSAGGIO_INVITATI_DUPLICATI = "L'elenco degli invitati contiene telefoni duplicati";
+    private static final String MESSAGGIO_INVITATO_MANCANTE = "Il telefono dell'invitato è obbligatorio";
+    private static final String MESSAGGIO_INVITA_SE_STESSO = "Non puoi invitare te stesso";
+    private static final String MESSAGGIO_UTENTE_NON_TROVATO = "Utente non trovato";
+    private static final String MESSAGGIO_NON_INVITA_ADMIN = "Non è possibile invitare un amministratore";
 
     private final PartitaRepository partitaRepository;
     private final UtenteRepository utenteRepository;
@@ -105,18 +123,46 @@ public class PrenotazioneService {
     // ============================================
     // Creazione prenotazione
     // ============================================
-    // Il creatore è l'utente autenticato (telefono dal JWT) ed è l'unico giocatore iniziale:
-    // gli altri entrano dopo, tramite inviti o bacheca pubblica.
+    // Il creatore è l'utente autenticato (telefono dal JWT). R11: può indicare subito fino a 3 invitati, che
+    // entrano come con POST /api/partite/{id}/inviti; gli altri posti si riempiono dopo con inviti o bacheca.
+    // Una sola transazione: se un invitato non è valido non resta salvata neanche la partita.
+    @Transactional
     public PrenotazioneDTO.Response create(PrenotazioneDTO.CreateRequest request, String telefonoCreatore) {
+        List<String> telefoniInvitati = request.getInvitati() == null ? List.of() : request.getInvitati();
+        validaElencoInvitati(telefoniInvitati, telefonoCreatore);
+
         Partita partita = nuovaPartitaSuSlot(request.getIdCampo(), request.getDataPrenotazione(), request.getOraInizio());
 
         Utente creatore = trovaUtenteOLancia(telefonoCreatore);
+        List<Utente> invitati = new ArrayList<>();
+        for (String telefono : telefoniInvitati) {
+            invitati.add(trovaInvitabileOLancia(telefono));
+        }
+        // Come in AdminService.creaPartita: gli INSERT prendono il lock sulla riga utente in ordine di telefono,
+        // per non andare in deadlock con un risultato registrato in parallelo (PunteggiService)
+        invitati.sort(Comparator.comparing(Utente::getTelefono));
+
         partita.setCreatore(creatore);
         // Il valore è già validato dal @Pattern del DTO
         partita.setTipo(TipoPartita.valueOf(request.getTipo()));
 
-        // Il creatore entra direttamente nella partita: non è un invito da accettare, per questo invitato = false
-        partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, creatore, false, false));
+        // D2: una prenotazione a meno di 12 ore dall'inizio non ha più la finestra di conferma,
+        // quindi creatore e invitati nascono confermati
+        boolean confermata = RegoleConfermaPartita.confermataAllIngresso(partita, LocalDateTime.now(clock));
+
+        // Il creatore entra direttamente nella partita: non è un invito da accettare, per questo invitato = false.
+        // Va aggiunto per primo, perché la risposta mette in giocatore 1 il creatore e in 2-4 gli altri in ordine di id
+        partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, creatore, false, confermata));
+        for (Utente invitato : invitati) {
+            partita.aggiungiPartecipazione(new Partecipazione(TipoPartecipazione.UTENTE, invitato, true, confermata));
+        }
+
+        // Con 4 utenti tutti confermati, cioè solo per una prenotazione tardiva, la partita nasce CONFERMATA
+        if (RegoleConfermaPartita.confermaSeCompleta(partita)) {
+            // T13: notifica ADMIN_CONFERMA all'amministratore (RF_GN_8)
+        }
+
+        // T13: notifiche di invito (RF_GN_1)
 
         return toResponse(salvaNuovaPartita(partita));
     }
@@ -130,6 +176,7 @@ public class PrenotazioneService {
 
         validaSlotAllInternoOrarioApertura(campo, oraInizio);
         validaDataNonPassata(campo, data, oraInizio);
+        validaEntroLimitePrenotazione(data);
 
         // Controlliamo la sovrapposizione con qualsiasi partita attiva sullo stesso
         // campo/data, non solo l'uguaglianza esatta dell'ora di inizio: altrimenti due
@@ -311,6 +358,41 @@ public class PrenotazioneService {
         if (inizio.isBefore(LocalDateTime.now(clock))) {
             throw new BusinessRuleException("Non è possibile prenotare uno slot nel passato");
         }
+    }
+
+    private void validaEntroLimitePrenotazione(LocalDate data) {
+        if (RegoleTempoPartita.oltreLimitePrenotazione(data, LocalDate.now(clock))) {
+            throw new BusinessRuleException(MESSAGGIO_OLTRE_LIMITE_PRENOTAZIONE);
+        }
+    }
+
+    // R11: controlli sull'elenco che non richiedono il database, prima di toccare lo slot.
+    // Chi esiste e chi è admin lo controlla trovaInvitabileOLancia.
+    private void validaElencoInvitati(List<String> telefoni, String telefonoCreatore) {
+        if (telefoni.size() > INVITATI_MAX) {
+            throw new RichiestaNonValidaException(MESSAGGIO_TROPPI_INVITATI);
+        }
+        Set<String> visti = new HashSet<>();
+        for (String telefono : telefoni) {
+            if (telefono == null || telefono.isBlank()) {
+                throw new RichiestaNonValidaException(MESSAGGIO_INVITATO_MANCANTE);
+            }
+            if (telefono.equals(telefonoCreatore)) {
+                throw new RichiestaNonValidaException(MESSAGGIO_INVITA_SE_STESSO);
+            }
+            if (!visti.add(telefono)) {
+                throw new RichiestaNonValidaException(MESSAGGIO_INVITATI_DUPLICATI);
+            }
+        }
+    }
+
+    private Utente trovaInvitabileOLancia(String telefono) {
+        Utente utente = utenteRepository.findById(telefono)
+                .orElseThrow(() -> new ResourceNotFoundException(MESSAGGIO_UTENTE_NON_TROVATO));
+        if (Boolean.TRUE.equals(utente.getIsAdmin())) {
+            throw new BusinessRuleException(MESSAGGIO_NON_INVITA_ADMIN);
+        }
+        return utente;
     }
 
     // L'inizio effettivo (data della serata + eventuale giorno dopo mezzanotte) è calcolato

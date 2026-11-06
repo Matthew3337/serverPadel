@@ -65,6 +65,9 @@ public class SecurityConfig {
                         .requestMatchers("/api/campi/**").hasRole("ADMIN")
                         // Area amministratore
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        // Ricerca degli utenti da invitare alla prenotazione: serve un utente autenticato.
+                        // Lo coprirebbe già anyRequest, ma è scritto per non aprirlo per sbaglio con una regola sopra
+                        .requestMatchers("/api/utenti/**").authenticated()
                         // Tutto il resto richiede autenticazione
                         .anyRequest().authenticated()
                 )

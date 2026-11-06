@@ -139,11 +139,13 @@ class PrenotazioneServiceTest {
 
         @Test
         void ilCreatoreEUnicoPartecipanteUtenteNonInvitatoNonConfermato() {
+            // Dopodomani: domani alle 10 potrebbe essere a meno di 12 ore, e il creatore nascerebbe confermato (D2)
+            LocalDate dopodomani = domani.plusDays(1);
             stubCampo(campoDiurno);
-            stubNessunaPartitaAttiva(domani);
+            stubNessunaPartitaAttiva(dopodomani);
             stubUtenti(TEL_1);
 
-            PrenotazioneDTO.Response r = service.create(richiesta(domani, LocalTime.of(10, 0), "PUBBLICA"), TEL_1);
+            PrenotazioneDTO.Response r = service.create(richiesta(dopodomani, LocalTime.of(10, 0), "PUBBLICA"), TEL_1);
 
             Partita salvata = catturaPartitaSalvata();
             assertThat(salvata.getCreatore().getTelefono()).isEqualTo(TEL_1);
@@ -1023,9 +1025,168 @@ class PrenotazioneServiceTest {
     }
 
     // ============================================
+    // Limite dei 15 giorni, prenotazione tardiva e invitati (R9, R11, D2, D6)
+    // ============================================
+    @Nested
+    class LimiteTardivaEInvitati {
+
+        private final ZoneId zona = ZoneId.of("Europe/Rome");
+        // Slot delle 18:00 di oggi: −12 h esatte sono le 06:00
+        private final LocalDate oggi = LocalDate.of(2026, 11, 1);
+        private final LocalTime ore18 = LocalTime.of(18, 0);
+        private final LocalDateTime meno12Ore = LocalDateTime.of(oggi, ore18).minusHours(12);
+
+        @BeforeEach
+        void stubSalvataggio() {
+            org.mockito.Mockito.lenient().when(partitaRepository.save(any(Partita.class))).thenAnswer(inv -> {
+                Partita p = inv.getArgument(0);
+                p.setId(42);
+                return p;
+            });
+        }
+
+        private PrenotazioneService serviceAlle(LocalDateTime adesso) {
+            Clock fisso = Clock.fixed(adesso.atZone(zona).toInstant(), zona);
+            return new PrenotazioneService(partitaRepository, utenteRepository, campoService, fisso);
+        }
+
+        private PrenotazioneDTO.CreateRequest conInvitati(LocalDate data, String... telefoni) {
+            PrenotazioneDTO.CreateRequest r = richiesta(data, ore18, "PRIVATA");
+            r.setInvitati(java.util.Arrays.asList(telefoni));
+            return r;
+        }
+
+        @Test
+        void quindiciGiorniEsattiSonoPrenotabili() {
+            LocalDate limite = oggi.plusDays(15);
+            stubCampo(campoDiurno);
+            stubNessunaPartitaAttiva(limite);
+            stubUtenti(TEL_1);
+
+            serviceAlle(meno12Ore).create(richiesta(limite, ore18, "PRIVATA"), TEL_1);
+
+            verify(partitaRepository).save(any(Partita.class));
+        }
+
+        @Test
+        void sediciGiorniDa409SenzaSalvare() {
+            stubCampo(campoDiurno);
+
+            assertThatThrownBy(() -> serviceAlle(meno12Ore).create(richiesta(oggi.plusDays(16), ore18, "PRIVATA"), TEL_1))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Si può prenotare al massimo 15 giorni in anticipo");
+            verify(partitaRepository, never()).save(any());
+        }
+
+        @Test
+        void aMeno12OreEsatteIlCreatoreNasceConfermato() {
+            stubCampo(campoDiurno);
+            stubNessunaPartitaAttiva(oggi);
+            stubUtenti(TEL_1);
+
+            PrenotazioneDTO.Response r = serviceAlle(meno12Ore).create(richiesta(oggi, ore18, "PRIVATA"), TEL_1);
+
+            assertThat(catturaPartitaSalvata().getPartecipazioni().get(0).getConfermata()).isTrue();
+            // Da solo non basta: resta creata e all'inizio la annulla lo scheduler
+            assertThat(r.getStato()).isEqualTo("creata");
+        }
+
+        @Test
+        void unSecondoPrimaDelle12OreIlCreatoreDeveConfermare() {
+            stubCampo(campoDiurno);
+            stubNessunaPartitaAttiva(oggi);
+            stubUtenti(TEL_1);
+
+            serviceAlle(meno12Ore.minusSeconds(1)).create(richiesta(oggi, ore18, "PRIVATA"), TEL_1);
+
+            assertThat(catturaPartitaSalvata().getPartecipazioni().get(0).getConfermata()).isFalse();
+        }
+
+        @Test
+        void tardivaConTreInvitatiNasceConfermata() {
+            stubCampo(campoDiurno);
+            stubNessunaPartitaAttiva(oggi);
+            stubUtenti(TEL_1, TEL_2, TEL_3, TEL_4);
+
+            PrenotazioneDTO.Response r = serviceAlle(meno12Ore)
+                    .create(conInvitati(oggi, TEL_4, TEL_2, TEL_3), TEL_1);
+
+            Partita salvata = catturaPartitaSalvata();
+            assertThat(salvata.getStato()).isEqualTo(StatoPartita.CONFERMATA);
+            assertThat(salvata.getPartecipazioni()).allMatch(Partecipazione::getConfermata);
+            assertThat(r.getStato()).isEqualTo("confermata");
+            // Creatore per primo, invitati in ordine di telefono
+            assertThat(List.of(r.getTelefonoGiocatore1(), r.getTelefonoGiocatore2(), r.getTelefonoGiocatore3(),
+                    r.getTelefonoGiocatore4())).containsExactly(TEL_1, TEL_2, TEL_3, TEL_4);
+        }
+
+        @Test
+        void nonTardivaConTreInvitatiRestaCreataConInvitatiDaConfermare() {
+            stubCampo(campoDiurno);
+            stubNessunaPartitaAttiva(oggi);
+            stubUtenti(TEL_1, TEL_2, TEL_3, TEL_4);
+
+            serviceAlle(meno12Ore.minusSeconds(1)).create(conInvitati(oggi, TEL_2, TEL_3, TEL_4), TEL_1);
+
+            Partita salvata = catturaPartitaSalvata();
+            assertThat(salvata.getStato()).isEqualTo(StatoPartita.CREATA);
+            List<Partecipazione> posti = salvata.getPartecipazioni();
+            assertThat(posti).hasSize(4).noneMatch(Partecipazione::getConfermata);
+            assertThat(posti.get(0).getInvitato()).isFalse();
+            assertThat(posti.subList(1, 4)).allMatch(Partecipazione::getInvitato)
+                    .allMatch(pa -> pa.getTipo() == TipoPartecipazione.UTENTE);
+        }
+
+        @Test
+        void elencoNonValidoDa400SenzaToccareLoSlot() {
+            assertRifiutato(conInvitati(oggi, TEL_2, TEL_3, TEL_4, TEL_ESTRANEO), "Si possono invitare al massimo 3 utenti");
+            assertRifiutato(conInvitati(oggi, TEL_2, TEL_2), "L'elenco degli invitati contiene telefoni duplicati");
+            assertRifiutato(conInvitati(oggi, TEL_1), "Non puoi invitare te stesso");
+            assertRifiutato(conInvitati(oggi, (String) null), "Il telefono dell'invitato è obbligatorio");
+
+            org.mockito.Mockito.verifyNoInteractions(campoService);
+            verify(partitaRepository, never()).save(any());
+        }
+
+        @Test
+        void invitatoInesistenteDa404SenzaSalvare() {
+            stubCampo(campoDiurno);
+            stubNessunaPartitaAttiva(oggi);
+            stubUtenti(TEL_1);
+            when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> serviceAlle(meno12Ore).create(conInvitati(oggi, TEL_ESTRANEO), TEL_1))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Utente non trovato");
+            verify(partitaRepository, never()).save(any());
+        }
+
+        @Test
+        void invitatoAdminDa409SenzaSalvare() {
+            stubCampo(campoDiurno);
+            stubNessunaPartitaAttiva(oggi);
+            stubUtenti(TEL_1);
+            when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.of(
+                    new Utente(TEL_ESTRANEO, "Admin", "Circolo", "hash", LocalDate.of(1990, 1, 1), true)));
+
+            assertThatThrownBy(() -> serviceAlle(meno12Ore).create(conInvitati(oggi, TEL_ESTRANEO), TEL_1))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Non è possibile invitare un amministratore");
+            verify(partitaRepository, never()).save(any());
+        }
+
+        private void assertRifiutato(PrenotazioneDTO.CreateRequest richiesta, String messaggio) {
+            assertThatThrownBy(() -> serviceAlle(meno12Ore).create(richiesta, TEL_1))
+                    .isInstanceOf(com.padelbooking.api.exception.RichiestaNonValidaException.class)
+                    .hasMessage(messaggio);
+        }
+    }
+
+    // ============================================
     // Helper
     // ============================================
     private void stubCampo(Campo campo) {
+
         when(campoService.trovaCampoOLancia(campo.getId())).thenReturn(campo);
     }
 

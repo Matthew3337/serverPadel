@@ -4,6 +4,8 @@ import com.padelbooking.api.model.Partita;
 import com.padelbooking.api.model.StatoPartita;
 import com.padelbooking.api.model.TipoPartecipazione;
 
+import java.time.LocalDateTime;
+
 // Regole sui posti e sul passaggio a "confermata" condivise dai service (RF_GC_5, RF_GC_6, RF_GC_10).
 // Stanno in un solo punto perché le usano la conferma dell'utente, l'attività pianificata delle
 // scadenze e, in T12, l'aggiunta dei giocatori campo da parte dell'admin (RF_GC_7).
@@ -43,6 +45,15 @@ public final class RegoleConfermaPartita {
         return partita.getPartecipazioni().stream()
                 .filter(pa -> pa.getTipo() == TipoPartecipazione.UTENTE)
                 .allMatch(pa -> Boolean.TRUE.equals(pa.getConfermata()));
+    }
+
+    // Valore di "confermata" per un nuovo posto UTENTE, in tutti i percorsi d'ingresso tranne la bacheca, che
+    // chiude a −24 h: prenotazione, inviti, partite create dall'admin e modifica dei partecipanti.
+    // In una partita già CONFERMATA nessuno deve più confermare; D2: a finestra di conferma chiusa (da −12 h)
+    // non si potrebbe più farlo, quindi l'ingresso vale come conferma. Dopo l'ingresso il chiamante applica
+    // confermaSeCompleta. adesso lo passa il chiamante dal proprio Clock, come in RegoleTempoPartita.
+    public static boolean confermataAllIngresso(Partita partita, LocalDateTime adesso) {
+        return partita.getStato() == StatoPartita.CONFERMATA || RegoleTempoPartita.dopoLimiteConferma(partita, adesso);
     }
 
     // RF_GC_6, RF_GC_7: una partita creata con 4 posti occupati e tutti gli utenti confermati passa

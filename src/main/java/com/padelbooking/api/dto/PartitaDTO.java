@@ -107,11 +107,14 @@ public class PartitaDTO {
         private Boolean puoUscire;
         private Boolean puoConfermare;
         private Boolean puoRegistrareRisultato;
+        // R13, D8: il creatore può passare la partita da pubblica a privata o viceversa
+        private Boolean puoCambiareTipo;
         public AzioniResponse() { }
         public AzioniResponse(Boolean puoInvitare, Boolean puoEliminare, Boolean puoUscire,
-                              Boolean puoConfermare, Boolean puoRegistrareRisultato) {
+                              Boolean puoConfermare, Boolean puoRegistrareRisultato, Boolean puoCambiareTipo) {
             this.puoInvitare = puoInvitare; this.puoEliminare = puoEliminare; this.puoUscire = puoUscire;
             this.puoConfermare = puoConfermare; this.puoRegistrareRisultato = puoRegistrareRisultato;
+            this.puoCambiareTipo = puoCambiareTipo;
         }
         public Boolean getPuoInvitare() { return puoInvitare; }
         public void setPuoInvitare(Boolean value) { this.puoInvitare = value; }
@@ -123,6 +126,8 @@ public class PartitaDTO {
         public void setPuoConfermare(Boolean value) { this.puoConfermare = value; }
         public Boolean getPuoRegistrareRisultato() { return puoRegistrareRisultato; }
         public void setPuoRegistrareRisultato(Boolean value) { this.puoRegistrareRisultato = value; }
+        public Boolean getPuoCambiareTipo() { return puoCambiareTipo; }
+        public void setPuoCambiareTipo(Boolean value) { this.puoCambiareTipo = value; }
     }
 
     // Una riga della bacheca delle partite pubbliche (UI_GP_4): lo slot, chi l'ha creata e quanti posti restano
@@ -290,6 +295,16 @@ public class PartitaDTO {
         public InvitoRequest(String telefono) { this.telefono = telefono; }
         public String getTelefono() { return telefono; }
         public void setTelefono(String value) { this.telefono = value; }
+    }
+
+    // Body di PUT /api/partite/{id}/tipo (R13). Niente annotazioni di validazione: come in RisultatoRequest
+    // il messaggio è senza il prefisso del campo, e lo controlla il service
+    public static class TipoRequest {
+        private String tipo;
+        public TipoRequest() { }
+        public TipoRequest(String tipo) { this.tipo = tipo; }
+        public String getTipo() { return tipo; }
+        public void setTipo(String value) { this.tipo = value; }
     }
 
     // Un utente che il creatore può invitare (UI_GI_2_SelezioneInvitati)

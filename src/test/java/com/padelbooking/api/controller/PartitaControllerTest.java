@@ -72,7 +72,7 @@ class PartitaControllerTest {
                 "creata", "PUBBLICA", TEL_1,
                 List.of(new PartitaDTO.PostoResponse(11, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, false, null),
                         new PartitaDTO.PostoResponse(12, "CAMPO", null, null, null, null, false, null)),
-                new PartitaDTO.AzioniResponse(true, true, false, false, false), null);
+                new PartitaDTO.AzioniResponse(true, true, false, false, false, true), null);
         when(partitaService.getDettaglio(7, TEL_1, false)).thenReturn(r);
 
         mockMvc.perform(get("/api/partite/7").with(user(principal(TEL_1, false))))
@@ -267,7 +267,7 @@ class PartitaControllerTest {
                 "creata", "PUBBLICA", "3330000009",
                 List.of(new PartitaDTO.PostoResponse(13, "UTENTE", "3330000009", "Anna", "Bianchi", 2.0, false, null),
                         new PartitaDTO.PostoResponse(14, "UTENTE", TEL_1, "Nome", "Cognome", 1.0, false, null)),
-                new PartitaDTO.AzioniResponse(false, false, true, false, false), null);
+                new PartitaDTO.AzioniResponse(false, false, true, false, false, false), null);
         when(partitaService.entra(7, TEL_1, false)).thenReturn(r);
 
         mockMvc.perform(post("/api/partite/7/entra").with(user(principal(TEL_1, false))))
@@ -453,7 +453,7 @@ class PartitaControllerTest {
                 "confermata", "PRIVATA", TEL_1,
                 List.of(new PartitaDTO.PostoResponse(15, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, true, null),
                         new PartitaDTO.PostoResponse(16, "CAMPO", null, null, null, null, false, null)),
-                new PartitaDTO.AzioniResponse(false, false, false, false, false), null);
+                new PartitaDTO.AzioniResponse(false, false, false, false, false, false), null);
         when(partitaService.conferma(7, TEL_1, false)).thenReturn(r);
 
         mockMvc.perform(post("/api/partite/7/conferma").with(user(principal(TEL_1, false))))
@@ -579,7 +579,7 @@ class PartitaControllerTest {
                 "creata", "PRIVATA", TEL_1,
                 List.of(new PartitaDTO.PostoResponse(17, "UTENTE", TEL_1, "Nome", "Cognome", 1.0, false, null),
                         new PartitaDTO.PostoResponse(18, "UTENTE", "3330000002", "Luigi", "Rossi", 3.5, false, null)),
-                new PartitaDTO.AzioniResponse(true, true, false, false, false), null);
+                new PartitaDTO.AzioniResponse(true, true, false, false, false, true), null);
         when(partitaService.invita(7, "3330000002", TEL_1, false)).thenReturn(r);
 
         mockMvc.perform(post("/api/partite/7/inviti").with(user(principal(TEL_1, false)))
@@ -731,7 +731,7 @@ class PartitaControllerTest {
                 "giocata", "PRIVATA", TEL_1,
                 List.of(new PartitaDTO.PostoResponse(11, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, true, 1),
                         new PartitaDTO.PostoResponse(14, "CAMPO", null, null, null, null, false, 2)),
-                new PartitaDTO.AzioniResponse(false, false, false, false, false), risultato);
+                new PartitaDTO.AzioniResponse(false, false, false, false, false, false), risultato);
         ArgumentCaptor<PartitaDTO.RisultatoRequest> body = ArgumentCaptor.forClass(PartitaDTO.RisultatoRequest.class);
         when(partitaService.registraRisultato(eq(7), body.capture(), eq(TEL_1), eq(false))).thenReturn(r);
 
@@ -899,7 +899,66 @@ class PartitaControllerTest {
         verify(partitaService, never()).registraRisultato(anyInt(), any(), anyString(), anyBoolean());
     }
 
+    // ============================================
+    // Le mie partite e cambio di visibilità (R12, R13)
+    // ============================================
+
+    @Test
+    void getMie200NonLettoComeIdEPassaIlFlagAdmin() throws Exception {
+        when(partitaService.getMiePartite(TEL_1, false)).thenReturn(List.of(new PartitaDTO.StoricoResponse(
+                7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
+                "creata", "PRIVATA", null)));
+
+        mockMvc.perform(get("/api/partite/mie").with(user(principal(TEL_1, false))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(7))
+                .andExpect(jsonPath("$[0].stato").value("creata"))
+                .andExpect(jsonPath("$[0].risultato").value(nullValue()));
+
+        verify(partitaService, never()).getDettaglio(anyInt(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void getMieSenzaAutenticazioneRifiutato() throws Exception {
+        mockMvc.perform(get("/api/partite/mie")).andExpect(status().isForbidden());
+
+        verify(partitaService, never()).getMiePartite(anyString(), anyBoolean());
+    }
+
+    @Test
+    void putTipo200PassaTipoTelefonoEFlag() throws Exception {
+        when(partitaService.cambiaTipo(7, "PRIVATA", TEL_1, false)).thenReturn(new PartitaDTO.DettaglioResponse());
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/partite/7/tipo")
+                        .with(user(principal(TEL_1, false)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tipo\":\"PRIVATA\"}"))
+                .andExpect(status().isOk());
+
+        verify(partitaService).cambiaTipo(7, "PRIVATA", TEL_1, false);
+    }
+
+    @Test
+    void putTipoErrori403E409ConFormatoErrore() throws Exception {
+        when(partitaService.cambiaTipo(7, "PUBBLICA", TEL_1, false))
+                .thenThrow(new AccessoNegatoException("Solo il creatore può modificare la visibilità"));
+        when(partitaService.cambiaTipo(8, "PUBBLICA", TEL_1, false))
+                .thenThrow(new BusinessRuleException("La partita è già iniziata"));
+
+        for (int id : List.of(7, 8)) {
+            mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/partite/" + id + "/tipo")
+                            .with(user(principal(TEL_1, false)))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"tipo\":\"PUBBLICA\"}"))
+                    .andExpect(status().is(id == 7 ? 403 : 409))
+                    .andExpect(jsonPath("$.errore").value(id == 7
+                            ? "Solo il creatore può modificare la visibilità" : "La partita è già iniziata"))
+                    .andExpect(jsonPath("$.length()").value(3));
+        }
+    }
+
     private static UtentePrincipal principal(String telefono, boolean admin) {
+
         return new UtentePrincipal(new Utente(telefono, "Nome", "Cognome", "hash", LocalDate.of(1990, 1, 1), admin));
     }
 }

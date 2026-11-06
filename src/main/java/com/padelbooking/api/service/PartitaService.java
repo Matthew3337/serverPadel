@@ -65,11 +65,17 @@ public class PartitaService {
 
     // Messaggi degli inviti (RNF_U_3): fanno parte del contratto con il client
     private static final String MESSAGGIO_SOLO_CREATORE_INVITA = "Solo il creatore può invitare";
-    private static final String MESSAGGIO_INVITI_CHIUSI =
-            "Gli inviti sono chiusi: mancano meno di " + RegoleTempoPartita.getLimiteModificheOre() + " ore all'inizio";
+    // D3: il creatore invita fino all'inizio effettivo, non più fino a −24 h
+    private static final String MESSAGGIO_INVITI_CHIUSI = "Gli inviti sono chiusi: la partita è già iniziata";
     private static final String MESSAGGIO_INVITATO_PARTECIPA_GIA = "L'utente partecipa già a questa partita";
     private static final String MESSAGGIO_NON_INVITA_ADMIN = "Non è possibile invitare un amministratore";
     private static final String MESSAGGIO_UTENTE_NON_TROVATO = "Utente non trovato";
+
+    // Messaggi del cambio di visibilità (RNF_U_3, D8): fanno parte del contratto con il client
+    private static final String MESSAGGIO_SOLO_CREATORE_TIPO = "Solo il creatore può modificare la visibilità";
+    private static final String MESSAGGIO_GIA_INIZIATA = "La partita è già iniziata";
+    private static final String MESSAGGIO_TIPO_OBBLIGATORIO = "Il tipo è obbligatorio";
+    private static final String MESSAGGIO_TIPO_NON_VALIDO = "Il tipo deve essere PUBBLICA o PRIVATA";
 
     // Messaggi della conferma (RNF_U_3): fanno parte del contratto con il client
     private static final String MESSAGGIO_ADMIN_NON_CONFERMA = "L'amministratore non conferma le partite";
@@ -94,8 +100,10 @@ public class PartitaService {
     // Carattere di escape per i LIKE della ricerca degli invitabili (vedi UtenteRepository.findInvitabili)
     private static final char ESCAPE_LIKE = '!';
 
-    // RF_GI_6: la bacheca inviti mostra le partite ancora da giocare, non annullate né giocate
+    // RF_GI_6: la bacheca inviti mostra le partite ancora da giocare, non annullate né giocate.
+    // Sono anche gli stati in cui il creatore invita (D3) e cambia la visibilità (D8)
     private static final List<StatoPartita> STATI_BACHECA_INVITI = List.of(StatoPartita.CREATA, StatoPartita.CONFERMATA);
+    private static final List<StatoPartita> STATI_APERTI_AL_CREATORE = STATI_BACHECA_INVITI;
 
     // Esito della partita per l'utente nello storico: fanno parte del contratto con il client
     private static final String ESITO_VINTA = "VINTA";
@@ -145,7 +153,7 @@ public class PartitaService {
     // L'admin gestisce le partite dalla sua pagina: qui non ha azioni, e il risultato non ha il suo punto di
     // vista. Lo usa anche AdminService, con la partita già letta nella sua transazione.
     public PartitaDTO.DettaglioResponse dettaglioPerAdmin(Partita partita) {
-        return toDettaglioResponse(partita, new PartitaDTO.AzioniResponse(false, false, false, false, false), null);
+        return toDettaglioResponse(partita, new PartitaDTO.AzioniResponse(false, false, false, false, false, false), null);
     }
 
     // ============================================
@@ -184,23 +192,44 @@ public class PartitaService {
     // ============================================
     // Storico partite
     // ============================================
-    // RF_GP_18, RF_GP_19: le partite non annullate in cui l'utente gioca, future e passate, dalla più
-    // recente, con il risultato se registrato. L'admin non gioca, quindi il suo storico è vuoto.
+    // RF_GP_18, RF_GP_19, R12, D7: le partite non annullate in cui l'utente gioca e già finite
+    // (adesso >= fine effettiva), dalla più recente, comprese quelle senza risultato, che si registra da qui.
+    // Quelle non ancora finite stanno in "Le mie partite". L'admin non gioca, quindi il suo storico è vuoto.
     @Transactional(readOnly = true)
     public List<PartitaDTO.StoricoResponse> getStorico(String telefonoRichiedente, boolean isAdmin) {
         if (isAdmin) {
             return List.of();
         }
-        // Una sola query: partita e campo arrivano in JOIN FETCH con la partecipazione dell'utente,
-        // che porta già squadra e punti; le altre partecipazioni della partita non servono
-        return partecipazioneRepository.findStoricoByTelefono(telefonoRichiedente, TipoPartecipazione.UTENTE,
-                        StatoPartita.ANNULLATA).stream()
+        LocalDateTime adesso = LocalDateTime.now(clock);
+        return partecipazioniNonAnnullate(telefonoRichiedente).stream()
+                .filter(pa -> RegoleTempoPartita.finita(pa.getPartita(), adesso))
                 // Ordine sull'inizio effettivo, come la bacheca ma decrescente: con data_partita e ora_inizio
                 // una partita alle 00:30 della serata risulterebbe precedente a quella delle 18:00.
                 // A parità di inizio (campi diversi) l'id rende l'ordine stabile
                 .sorted(Comparator.comparing((Partecipazione pa) -> RegoleTempoPartita.inizioEffettivo(pa.getPartita()))
                         .thenComparing(pa -> pa.getPartita().getId())
                         .reversed())
+                .map(this::toStoricoResponse)
+                .toList();
+    }
+
+    // ============================================
+    // Le mie partite
+    // ============================================
+    // R12: le partite non annullate in cui l'utente gioca e non ancora finite (adesso < fine effettiva),
+    // quindi anche quella in corso, dalla più vicina. Stesso formato dello storico: le due liste si
+    // dividono le stesse partite sul confine della fine effettiva. L'admin non gioca: lista vuota.
+    @Transactional(readOnly = true)
+    public List<PartitaDTO.StoricoResponse> getMiePartite(String telefonoRichiedente, boolean isAdmin) {
+        if (isAdmin) {
+            return List.of();
+        }
+        LocalDateTime adesso = LocalDateTime.now(clock);
+        return partecipazioniNonAnnullate(telefonoRichiedente).stream()
+                .filter(pa -> !RegoleTempoPartita.finita(pa.getPartita(), adesso))
+                // Ordine sull'inizio effettivo crescente, come la bacheca; a parità di inizio decide l'id
+                .sorted(Comparator.comparing((Partecipazione pa) -> RegoleTempoPartita.inizioEffettivo(pa.getPartita()))
+                        .thenComparing(pa -> pa.getPartita().getId()))
                 .map(this::toStoricoResponse)
                 .toList();
     }
@@ -387,8 +416,10 @@ public class PartitaService {
             throw new BusinessRuleException(MESSAGGIO_INVITATO_PARTECIPA_GIA);
         }
 
-        // Invitato e non ancora confermato: la conferma arriva tra -24 h e -12 h, come per chi entra da solo
-        Partecipazione nuova = new Partecipazione(TipoPartecipazione.UTENTE, invitato, true, false);
+        // La conferma arriva tra -24 h e -12 h, come per chi entra da solo. D2, D3: un invito a finestra
+        // di conferma chiusa, o in una partita già CONFERMATA con un posto libero, vale già come conferma
+        Partecipazione nuova = new Partecipazione(TipoPartecipazione.UTENTE, invitato, true,
+                RegoleConfermaPartita.confermataAllIngresso(partita, adesso));
         partita.aggiungiPartecipazione(nuova);
         try {
             // Come in entra: la partita è gestita dall'EntityManager e il cascade inserisce la partecipazione
@@ -401,7 +432,47 @@ public class PartitaService {
             throw ex;
         }
 
+        // Con il quarto posto e tutti gli utenti confermati la partita passa a CONFERMATA. Se resta un utente
+        // entrato prima di −12 h senza confermare, resta CREATA e all'inizio la annulla lo scheduler (D2)
+        if (RegoleConfermaPartita.confermaSeCompleta(partita)) {
+            // T13: notifica ADMIN_CONFERMA all'amministratore (RF_GN_8)
+        }
+
         // T13: notifica di invito (RF_GN_1)
+
+        return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso), partecipazione);
+    }
+
+    // ============================================
+    // Cambio di visibilità
+    // ============================================
+    // R13, D8: il creatore passa la partita da pubblica a privata o viceversa fino all'inizio effettivo.
+    // Chi è già in partita ci resta: cambia solo chi la vede in bacheca. Valgono le stesse regole di
+    // puoCambiareTipo. L'admin non è mai il creatore che gioca, quindi riceve subito 403 come in invita.
+    @Transactional
+    public PartitaDTO.DettaglioResponse cambiaTipo(Integer idPartita, String tipo, String telefonoRichiedente,
+                                                   boolean isAdmin) {
+        if (isAdmin) {
+            throw new AccessoNegatoException(MESSAGGIO_SOLO_CREATORE_TIPO);
+        }
+        // Il tipo si controlla prima di leggere la partita: un valore errato non rivela se la partita esiste
+        TipoPartita nuovo = tipoDaRichiesta(tipo);
+
+        // Lock come prima lettura, come in entra: un ingresso dalla bacheca concorrente si serializza
+        // e trova già il tipo aggiornato
+        Partita partita = partitaRepository.findByIdPerAggiornamento(idPartita)
+                .orElseThrow(() -> partitaNonTrovata(idPartita));
+        Partecipazione partecipazione = verificaVisibileOLancia(partita, telefonoRichiedente);
+
+        LocalDateTime adesso = LocalDateTime.now(clock);
+        Optional<RuntimeException> rifiuto = rifiutoCambioTipo(partita, partecipazione, adesso);
+        if (rifiuto.isPresent()) {
+            throw rifiuto.get();
+        }
+
+        // La partita è gestita dall'EntityManager: il cambio lo scrive il dirty checking al commit.
+        // Lo stesso tipo di prima non è un errore: la richiesta è già soddisfatta
+        partita.setTipo(nuovo);
 
         return toDettaglioResponse(partita, calcolaAzioni(partita, partecipazione, adesso), partecipazione);
     }
@@ -581,14 +652,30 @@ public class PartitaService {
         if (!eCreatore(partita, partecipazione)) {
             return Optional.of(new AccessoNegatoException(MESSAGGIO_SOLO_CREATORE_INVITA));
         }
-        if (partita.getStato() != StatoPartita.CREATA) {
+        // D3: anche una CONFERMATA che ha perso un posto (per esempio un giocatore campo tolto dall'admin)
+        if (!STATI_APERTI_AL_CREATORE.contains(partita.getStato())) {
             return Optional.of(new BusinessRuleException(MESSAGGIO_NON_PIU_APERTA));
         }
-        if (!RegoleTempoPartita.primaDelLimiteModifiche(partita, adesso)) {
+        if (RegoleTempoPartita.iniziata(partita, adesso)) {
             return Optional.of(new BusinessRuleException(MESSAGGIO_INVITI_CHIUSI));
         }
         if (partita.getPartecipazioni().size() >= POSTI_MAX) {
             return Optional.of(new BusinessRuleException(MESSAGGIO_AL_COMPLETO));
+        }
+        return Optional.empty();
+    }
+
+    // Come rifiutoEliminazione, per il cambio di visibilità: condivisa da cambiaTipo e da puoCambiareTipo (D8)
+    private Optional<RuntimeException> rifiutoCambioTipo(Partita partita, Partecipazione partecipazione,
+                                                         LocalDateTime adesso) {
+        if (!eCreatore(partita, partecipazione)) {
+            return Optional.of(new AccessoNegatoException(MESSAGGIO_SOLO_CREATORE_TIPO));
+        }
+        if (!STATI_APERTI_AL_CREATORE.contains(partita.getStato())) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_NON_PIU_APERTA));
+        }
+        if (RegoleTempoPartita.iniziata(partita, adesso)) {
+            return Optional.of(new BusinessRuleException(MESSAGGIO_GIA_INIZIATA));
         }
         return Optional.empty();
     }
@@ -685,6 +772,27 @@ public class PartitaService {
         }
     }
 
+    // Storico e "Le mie partite" (R12): una sola query, partita e campo arrivano in JOIN FETCH con la
+    // partecipazione dell'utente, che porta già squadra e punti; le altre partecipazioni non servono.
+    // La divisione sulla fine effettiva si fa in Java, come per le partite dopo mezzanotte nella bacheca
+    private List<Partecipazione> partecipazioniNonAnnullate(String telefono) {
+        return partecipazioneRepository.findStoricoByTelefono(telefono, TipoPartecipazione.UTENTE,
+                StatoPartita.ANNULLATA);
+    }
+
+    // Solo i due valori del contratto, come in AdminService: il messaggio è senza il prefisso del campo
+    private TipoPartita tipoDaRichiesta(String tipo) {
+        if (tipo == null || tipo.isBlank()) {
+            throw new RichiestaNonValidaException(MESSAGGIO_TIPO_OBBLIGATORIO);
+        }
+        for (TipoPartita valore : TipoPartita.values()) {
+            if (valore.name().equals(tipo)) {
+                return valore;
+            }
+        }
+        throw new RichiestaNonValidaException(MESSAGGIO_TIPO_NON_VALIDO);
+    }
+
     // Pattern per findInvitabili: "contiene", senza distinzione tra maiuscole e minuscole.
     // Senza testo di ricerca diventa "%%", che corrisponde a tutti (nome e cognome non sono mai null).
     // %, _ e il carattere di escape scritti dall'utente vanno cercati come caratteri normali.
@@ -747,8 +855,10 @@ public class PartitaService {
         boolean puoUscire = rifiutoUscita(partita, partecipazione, adesso).isEmpty();
         boolean puoConfermare = rifiutoConferma(partita, partecipazione, adesso).isEmpty();
         boolean puoRegistrareRisultato = rifiutoRisultato(partita, partecipazione, adesso).isEmpty();
+        boolean puoCambiareTipo = rifiutoCambioTipo(partita, partecipazione, adesso).isEmpty();
 
-        return new PartitaDTO.AzioniResponse(puoInvitare, puoEliminare, puoUscire, puoConfermare, puoRegistrareRisultato);
+        return new PartitaDTO.AzioniResponse(puoInvitare, puoEliminare, puoUscire, puoConfermare, puoRegistrareRisultato,
+                puoCambiareTipo);
     }
 
     // Partecipazione UTENTE del richiedente, se occupa un posto nella partita
