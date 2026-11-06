@@ -22,6 +22,9 @@ public final class RegoleTempoPartita {
     // Per quante ore dopo la fine si può registrare il risultato
     private static final int FINESTRA_RISULTATO_ORE = 24;
 
+    // R9, D6: si prenota al massimo fino alla serata di oggi + 15 giorni, sia l'utente sia l'admin
+    private static final int GIORNI_PRENOTAZIONE_MAX = 15;
+
     private RegoleTempoPartita() {
     }
 
@@ -68,6 +71,12 @@ public final class RegoleTempoPartita {
                 && adesso.isBefore(inizio.minusHours(LIMITE_CONFERMA_ORE));
     }
 
+    // inizio - 12 h <= adesso: la finestra di conferma è chiusa. D2: chi entra da qui in poi (prenotazione
+    // tardiva, invito, admin) non avrebbe più modo di confermare, quindi la sua partecipazione nasce confermata
+    public static boolean dopoLimiteConferma(Partita partita, LocalDateTime adesso) {
+        return !adesso.isBefore(inizioEffettivo(partita).minusHours(LIMITE_CONFERMA_ORE));
+    }
+
     // inizio <= adesso: la partita è iniziata, quindi l'attività pianificata la annulla se non è
     // confermata con 4 posti (RF_GC_9, RF_GC_10). "<=" e non "nel minuto esatto": dopo un fermo
     // del server la scadenza resta maturata e viene recuperata al primo giro (RNF_A_3)
@@ -84,6 +93,20 @@ public final class RegoleTempoPartita {
     // fine <= adesso <= fine + 24 h: registrazione del risultato
     public static boolean inFinestraRisultato(Partita partita, LocalDateTime adesso) {
         return finita(partita, adesso) && !adesso.isAfter(fineEffettiva(partita).plusHours(FINESTRA_RISULTATO_ORE));
+    }
+
+    // ============================================
+    // Limite di prenotazione
+    // ============================================
+
+    // R9, D6: dataSerata è data_partita, la data che il client mostra nel calendario dei giorni prenotabili,
+    // quindi il confronto è tra date e non sull'inizio effettivo: oggi + 15 è ancora prenotabile
+    public static boolean oltreLimitePrenotazione(LocalDate dataSerata, LocalDate oggi) {
+        return dataSerata.isAfter(oggi.plusDays(GIORNI_PRENOTAZIONE_MAX));
+    }
+
+    public static int getGiorniPrenotazioneMax() {
+        return GIORNI_PRENOTAZIONE_MAX;
     }
 
     // Serve ai messaggi d'errore, che riportano la soglia in ore

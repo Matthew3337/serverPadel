@@ -423,6 +423,38 @@ class AdminServiceTest {
         }
 
         @Test
+        void aMenoDi12OreINuoviNasconoConfermatiEConQuattroPostiConfermata() {
+            // D2: oggi alle 18, adesso sono le 12
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A);
+            p.setDataPartita(ADESSO.toLocalDate());
+            p.getPartecipazioni().get(0).setConfermata(true);
+            stubLock(p);
+            stubUtente(TEL_B);
+            stubUtente(TEL_C);
+            stubUtente(TEL_D);
+
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C, TEL_D), TEL_ADMIN);
+
+            assertThat(p.getPartecipazioni()).allMatch(Partecipazione::getConfermata);
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CONFERMATA);
+        }
+
+        @Test
+        void aMenoDi12OreConUnUtenteNonConfermatoRestaCreata() {
+            Partita p = partita(StatoPartita.CREATA, 18, TEL_A);
+            p.setDataPartita(ADESSO.toLocalDate());
+            stubLock(p);
+            stubUtente(TEL_B);
+            stubUtente(TEL_C);
+            stubUtente(TEL_D);
+
+            service.modificaPartecipanti(ID_PARTITA, List.of(TEL_A, TEL_B, TEL_C, TEL_D), TEL_ADMIN);
+
+            assertThat(p.getPartecipazioni().subList(1, 4)).allMatch(Partecipazione::getConfermata);
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+        }
+
+        @Test
         void iNuoviEntranoInOrdineDiTelefonoComeILockDeiPunteggi() {
             Partita p = partita(StatoPartita.CREATA, 18, TEL_A);
             stubLock(p);
@@ -1597,6 +1629,50 @@ class AdminServiceTest {
         }
 
         @Test
+        void aMenoDi12OreGliUtentiNasconoConfermatiEConQuattroPostiConfermata() {
+            // D2: oggi alle 21:30, −12 h sono le 09:30 e adesso sono le 12
+            stubCampo();
+            stubUtenti(TEL_A, TEL_B);
+            stubSalvataggio();
+            AdminDTO.NuovaPartitaRequest r = richiesta(2, TEL_A, TEL_B);
+            r.setDataPartita(ADESSO.toLocalDate());
+            r.setOraInizio(LocalTime.of(21, 30));
+
+            PartitaDTO.DettaglioResponse risposta = service.creaPartita(r, TEL_ADMIN);
+
+            assertThat(risposta.getStato()).isEqualTo("confermata");
+            assertThat(risposta.getPosti()).extracting(PartitaDTO.PostoResponse::getConfermata)
+                    .containsExactly(true, true, false, false);
+        }
+
+        @Test
+        void aMenoDi12OreConPostiLiberiRestaCreata() {
+            stubCampo();
+            stubUtenti(TEL_A);
+            stubSalvataggio();
+            AdminDTO.NuovaPartitaRequest r = richiesta(0, TEL_A);
+            r.setDataPartita(ADESSO.toLocalDate());
+            r.setOraInizio(LocalTime.of(21, 30));
+
+            PartitaDTO.DettaglioResponse risposta = service.creaPartita(r, TEL_ADMIN);
+
+            assertThat(risposta.getStato()).isEqualTo("creata");
+            assertThat(risposta.getPosti().get(0).getConfermata()).isTrue();
+        }
+
+        @Test
+        void oltre15GiorniDa409ComePerGliUtenti() {
+            stubCampo();
+            AdminDTO.NuovaPartitaRequest r = richiesta(0, TEL_A);
+            r.setDataPartita(ADESSO.toLocalDate().plusDays(16));
+
+            assertThatThrownBy(() -> service.creaPartita(r, TEL_ADMIN))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("Si può prenotare al massimo 15 giorni in anticipo");
+            verify(partitaRepository, never()).save(any());
+        }
+
+        @Test
         void quattroPostiRestanoCreataEGiocatoriCampoFacoltativo() {
             stubCampo();
             stubUtenti(TEL_A, TEL_B, TEL_C, TEL_D);
@@ -1848,5 +1924,7 @@ class AdminServiceTest {
         assertThat(azioni.getPuoUscire()).isFalse();
         assertThat(azioni.getPuoConfermare()).isFalse();
         assertThat(azioni.getPuoRegistrareRisultato()).isFalse();
+        assertThat(azioni.getPuoCambiareTipo()).isFalse();
     }
 }
+

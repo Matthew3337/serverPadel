@@ -267,13 +267,14 @@ class PartitaServiceTest {
         }
 
         @Test
-        void creatoreEsattamenteA24OreNonPuoEliminareMaPuoConfermare() {
+        void creatoreEsattamenteA24OreNonPuoEliminareMaPuoConfermareEInvitare() {
             stubPartita(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(24)));
 
             PartitaDTO.AzioniResponse a = service.getDettaglio(7, TEL_CREATORE, false).getAzioni();
 
             assertThat(a.getPuoEliminare()).isFalse();
-            assertThat(a.getPuoInvitare()).isFalse();
+            // D3: gli inviti restano aperti fino all'inizio
+            assertThat(a.getPuoInvitare()).isTrue();
             assertThat(a.getPuoConfermare()).isTrue();
         }
 
@@ -1018,7 +1019,7 @@ class PartitaServiceTest {
 
         @Test
         void formatoDellaRigaSenzaRisultato() {
-            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, LocalDateTime.of(2026, 11, 5, 18, 0));
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, LocalDateTime.of(2026, 10, 25, 18, 0));
             stubStorico(p.getPartecipazioni().get(0));
 
             List<PartitaDTO.StoricoResponse> r = service.getStorico(TEL_CREATORE, false);
@@ -1028,7 +1029,7 @@ class PartitaServiceTest {
             assertThat(riga.getId()).isEqualTo(7);
             assertThat(riga.getIdCampo()).isEqualTo(1);
             assertThat(riga.getNomeCampo()).isEqualTo("Campo 1");
-            assertThat(riga.getDataPartita()).isEqualTo(LocalDate.of(2026, 11, 5));
+            assertThat(riga.getDataPartita()).isEqualTo(LocalDate.of(2026, 10, 25));
             assertThat(riga.getOraInizio()).isEqualTo(LocalTime.of(18, 0));
             assertThat(riga.getOraFine()).isEqualTo(LocalTime.of(19, 30));
             assertThat(riga.getStato()).isEqualTo("creata");
@@ -1142,7 +1143,8 @@ class PartitaServiceTest {
 
         @Test
         void statoConfermataInMinuscoloETipoPubblica() {
-            Partita p = partita(StatoPartita.CONFERMATA, TipoPartita.PUBBLICA, ADESSO.plusHours(10));
+            // D7: finita senza risultato, resta nello storico
+            Partita p = partita(StatoPartita.CONFERMATA, TipoPartita.PUBBLICA, ADESSO.minusHours(10));
             stubStorico(p.getPartecipazioni().get(0));
 
             PartitaDTO.StoricoResponse riga = service.getStorico(TEL_CREATORE, false).get(0);
@@ -1154,14 +1156,15 @@ class PartitaServiceTest {
 
         @Test
         void ordinatoPerInizioEffettivoDecrescenteAncheDopoMezzanotte() {
-            // Campo aperto dalle 18:00 alle 02:00: lo slot delle 00:30 della serata del 5 inizia il 6
+            // Campo aperto dalle 18:00 alle 02:00: lo slot delle 00:30 della serata del 25 inizia il 26.
+            // Tutte già finite, perché lo storico contiene solo quelle
             Campo notturno = new Campo(2, "Campo notte", true, LocalTime.of(18, 0), LocalTime.of(2, 0));
-            Partita serata = partitaConId(10, notturno, LocalDate.of(2026, 11, 5), LocalTime.of(18, 0));
-            Partita dopoMezzanotte = partitaConId(11, notturno, LocalDate.of(2026, 11, 5), LocalTime.of(0, 30));
+            Partita serata = partitaConId(10, notturno, LocalDate.of(2026, 10, 25), LocalTime.of(18, 0));
+            Partita dopoMezzanotte = partitaConId(11, notturno, LocalDate.of(2026, 10, 25), LocalTime.of(0, 30));
             Partita passata = partitaConId(12, campoDiurno, LocalDate.of(2026, 10, 20), LocalTime.of(10, 0));
-            Partita futura = partitaConId(13, campoDiurno, LocalDate.of(2026, 11, 20), LocalTime.of(10, 0));
+            Partita futura = partitaConId(13, campoDiurno, LocalDate.of(2026, 10, 30), LocalTime.of(10, 0));
             // Stesso inizio di "serata" su un altro campo: a parità vince l'id più alto
-            Partita stessoInizio = partitaConId(14, campoDiurno, LocalDate.of(2026, 11, 5), LocalTime.of(18, 0));
+            Partita stessoInizio = partitaConId(14, campoDiurno, LocalDate.of(2026, 10, 25), LocalTime.of(18, 0));
             when(partecipazioneRepository.findStoricoByTelefono(TEL_CREATORE, TipoPartecipazione.UTENTE,
                     StatoPartita.ANNULLATA)).thenReturn(List.of(
                     serata.getPartecipazioni().get(0), passata.getPartecipazioni().get(0),
@@ -1375,8 +1378,22 @@ class PartitaServiceTest {
         }
 
         @Test
-        void confermataDa409NonPiuAperta() {
-            stubLock(partita(StatoPartita.CONFERMATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+        void confermataConPostoLiberoInvitoAmmessoEGiaConfermato() {
+            // D3: una CONFERMATA che ha perso un posto riapre gli inviti; in una partita già confermata
+            // nessuno deve più confermare, quindi resta CONFERMATA
+            Partita p = partita(StatoPartita.CONFERMATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            stubLock(p);
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+
+            service.invita(7, TEL_2, TEL_CREATORE, false);
+
+            assertThat(p.getPartecipazioni().get(1).getConfermata()).isTrue();
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CONFERMATA);
+        }
+
+        @Test
+        void giocataDa409NonPiuAperta() {
+            stubLock(partita(StatoPartita.GIOCATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
 
             assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_CREATORE, false))
                     .isInstanceOf(BusinessRuleException.class)
@@ -1393,15 +1410,83 @@ class PartitaServiceTest {
         }
 
         @Test
-        void esattamente24OrePrimaDa409InvitiChiusi() {
-            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(24));
+        void allInizioEsattoDa409InvitiChiusi() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO);
             stubLock(p);
 
             assertThatThrownBy(() -> service.invita(7, TEL_2, TEL_CREATORE, false))
                     .isInstanceOf(BusinessRuleException.class)
-                    .hasMessage("Gli inviti sono chiusi: mancano meno di 24 ore all'inizio");
+                    .hasMessage("Gli inviti sono chiusi: la partita è già iniziata");
             assertThat(p.getPartecipazioni()).hasSize(1);
             verify(partitaRepository, never()).flush();
+        }
+
+        @Test
+        void unMinutoPrimaDellInizioInvitoAmmessoEConfermato() {
+            // D2, D3: a finestra di conferma chiusa l'invitato nasce confermato
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusMinutes(1));
+            stubLock(p);
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+
+            PartitaDTO.DettaglioResponse r = service.invita(7, TEL_2, TEL_CREATORE, false);
+
+            Partecipazione nuova = p.getPartecipazioni().get(1);
+            assertThat(nuova.getInvitato()).isTrue();
+            assertThat(nuova.getConfermata()).isTrue();
+            // Solo 2 posti: resta CREATA e all'inizio la annulla lo scheduler
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
+            assertThat(r.getAzioni().getPuoInvitare()).isTrue();
+        }
+
+        @Test
+        void esattamente12OrePrimaInvitatoConfermato() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(12));
+            stubLock(p);
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+
+            service.invita(7, TEL_2, TEL_CREATORE, false);
+
+            assertThat(p.getPartecipazioni().get(1).getConfermata()).isTrue();
+        }
+
+        @Test
+        void unSecondoPrimaDelle12OreInvitatoDaConfermare() {
+            // Finestra di conferma ancora aperta: l'invitato conferma come gli altri
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(12).plusSeconds(1));
+            stubLock(p);
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+
+            service.invita(7, TEL_2, TEL_CREATORE, false);
+
+            assertThat(p.getPartecipazioni().get(1).getConfermata()).isFalse();
+        }
+
+        @Test
+        void quartoPostoTardivoConUtentiConfermatiPortaAConfermata() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(2));
+            p.getPartecipazioni().get(0).setConfermata(true);
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubLock(p);
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+
+            service.invita(7, TEL_2, TEL_CREATORE, false);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CONFERMATA);
+        }
+
+        @Test
+        void quartoPostoTardivoConUtenteNonConfermatoRestaCreata() {
+            // Il creatore era entrato prima di −12 h e non ha confermato: all'inizio la partita si annulla
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusHours(2));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            aggiungi(p, 3, new Partecipazione(TipoPartecipazione.CAMPO, null, false, false));
+            stubLock(p);
+            when(utenteRepository.findById(TEL_2)).thenReturn(Optional.of(secondo));
+
+            service.invita(7, TEL_2, TEL_CREATORE, false);
+
+            assertThat(p.getStato()).isEqualTo(StatoPartita.CREATA);
         }
 
         @Test
@@ -1581,7 +1666,7 @@ class PartitaServiceTest {
     // ============================================
     // Coerenza tra puoInvitare e invita
     // ============================================
-    // Per ogni combinazione di stato, istante (limite esatto delle 24 h e un secondo prima),
+    // Per ogni combinazione di stato, istante (inizio esatto, un secondo prima e −24 h, D3),
     // richiedente e posti occupati, puoInvitare vale true esattamente quando invita va a buon fine
     @Nested
     class CoerenzaInviti {
@@ -1592,7 +1677,7 @@ class PartitaServiceTest {
             lenient().when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.of(
                     new Utente(TEL_ESTRANEO, "Anna", "Bianchi", "x", LocalDate.of(1990, 1, 1), false, 2.5)));
             for (StatoPartita stato : StatoPartita.values()) {
-                for (LocalDateTime inizio : List.of(ADESSO.plusHours(24), ADESSO.plusHours(24).plusSeconds(1))) {
+                for (LocalDateTime inizio : List.of(ADESSO, ADESSO.plusSeconds(1), ADESSO.plusHours(24))) {
                     for (String telefono : List.of(TEL_CREATORE, TEL_2)) {
                         for (boolean completa : List.of(false, true)) {
                             stubPartita(scenario(stato, inizio, completa));
@@ -2744,9 +2829,189 @@ class PartitaServiceTest {
     }
 
     // ============================================
+    // Le mie partite e storico (R12, D7)
+    // ============================================
+    @Nested
+    class MiePartiteEStorico {
+
+        @Test
+        void adminRiceveListeVuoteSenzaInterrogareIlDb() {
+            assertThat(service.getMiePartite(TEL_ESTRANEO, true)).isEmpty();
+            assertThat(service.getStorico(TEL_ESTRANEO, true)).isEmpty();
+
+            verifyNoInteractions(partecipazioneRepository);
+        }
+
+        @Test
+        void allaFineEsattaLaPartitaPassaAlloStorico() {
+            // Fine effettiva = adesso: è finita
+            stubPartecipazioni(partita(StatoPartita.CONFERMATA, TipoPartita.PUBBLICA, ADESSO.minusMinutes(90)));
+
+            assertThat(service.getMiePartite(TEL_CREATORE, false)).isEmpty();
+            assertThat(service.getStorico(TEL_CREATORE, false)).extracting(PartitaDTO.StoricoResponse::getId)
+                    .containsExactly(7);
+        }
+
+        @Test
+        void unSecondoPrimaDellaFineLaPartitaEInMiePartite() {
+            // In corso: inizio passato, fine tra un secondo
+            stubPartecipazioni(partita(StatoPartita.CONFERMATA, TipoPartita.PUBBLICA,
+                    ADESSO.minusMinutes(90).plusSeconds(1)));
+
+            assertThat(service.getStorico(TEL_CREATORE, false)).isEmpty();
+            assertThat(service.getMiePartite(TEL_CREATORE, false)).extracting(PartitaDTO.StoricoResponse::getId)
+                    .containsExactly(7);
+        }
+
+        @Test
+        void miePartiteOrdinatePerInizioEffettivoCrescente() {
+            // Campo 18:00-02:00: le 00:30 della serata del 5 vengono dopo le 18:00 della stessa serata
+            Campo notturno = new Campo(2, "Campo notte", true, LocalTime.of(18, 0), LocalTime.of(2, 0));
+            Partita dopoMezzanotte = conId(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA,
+                    LocalDateTime.of(2026, 11, 5, 0, 30)), 10, notturno);
+            Partita serata = conId(partita(StatoPartita.CREATA, TipoPartita.PUBBLICA,
+                    LocalDateTime.of(2026, 11, 5, 18, 0)), 11, notturno);
+            Partita domani = conId(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(1)), 12,
+                    campoDiurno);
+            stubPartecipazioni(dopoMezzanotte, serata, domani);
+
+            assertThat(service.getMiePartite(TEL_CREATORE, false)).extracting(PartitaDTO.StoricoResponse::getId)
+                    .containsExactly(12, 11, 10);
+        }
+
+        private Partita conId(Partita p, int id, Campo campo) {
+            p.setId(id);
+            p.setCampo(campo);
+            return p;
+        }
+
+        private void stubPartecipazioni(Partita... partite) {
+            when(partecipazioneRepository.findStoricoByTelefono(TEL_CREATORE, TipoPartecipazione.UTENTE,
+                    StatoPartita.ANNULLATA)).thenReturn(Arrays.stream(partite)
+                    .map(p -> p.getPartecipazioni().get(0))
+                    .toList());
+        }
+    }
+
+    // ============================================
+    // Cambio di visibilità (R13, D8)
+    // ============================================
+    @Nested
+    class CambioTipo {
+
+        @Test
+        void adminRifiutatoCon403SenzaLeggereLaPartita() {
+            assertThatThrownBy(() -> service.cambiaTipo(7, "PRIVATA", TEL_CREATORE, true))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può modificare la visibilità");
+
+            verifyNoInteractions(partitaRepository);
+        }
+
+        @Test
+        void tipoNonValidoDa400SenzaLeggereLaPartita() {
+            assertThatThrownBy(() -> service.cambiaTipo(7, "SEGRETA", TEL_CREATORE, false))
+                    .isInstanceOf(RichiestaNonValidaException.class)
+                    .hasMessage("Il tipo deve essere PUBBLICA o PRIVATA");
+            assertThatThrownBy(() -> service.cambiaTipo(7, null, TEL_CREATORE, false))
+                    .isInstanceOf(RichiestaNonValidaException.class)
+                    .hasMessage("Il tipo è obbligatorio");
+
+            verifyNoInteractions(partitaRepository);
+        }
+
+        @Test
+        void privataNonVisibileDa404() {
+            stubLock(partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+
+            assertThatThrownBy(() -> service.cambiaTipo(7, "PUBBLICA", TEL_ESTRANEO, false))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessage("Partita non trovata con id 7");
+        }
+
+        @Test
+        void partecipanteNonCreatoreDa403() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PRIVATA, ADESSO.plusDays(3));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.cambiaTipo(7, "PUBBLICA", TEL_2, false))
+                    .isInstanceOf(AccessoNegatoException.class)
+                    .hasMessage("Solo il creatore può modificare la visibilità");
+            assertThat(p.getTipo()).isEqualTo(TipoPartita.PRIVATA);
+        }
+
+        @Test
+        void giocataOAnnullataDa409NonPiuAperta() {
+            for (StatoPartita stato : List.of(StatoPartita.GIOCATA, StatoPartita.ANNULLATA)) {
+                stubLock(partita(stato, TipoPartita.PRIVATA, ADESSO.plusDays(3)));
+
+                assertThatThrownBy(() -> service.cambiaTipo(7, "PUBBLICA", TEL_CREATORE, false))
+                        .isInstanceOf(BusinessRuleException.class)
+                        .hasMessage("La partita non è più aperta");
+            }
+        }
+
+        @Test
+        void allInizioEsattoDa409GiaIniziata() {
+            Partita p = partita(StatoPartita.CONFERMATA, TipoPartita.PRIVATA, ADESSO);
+            stubLock(p);
+
+            assertThatThrownBy(() -> service.cambiaTipo(7, "PUBBLICA", TEL_CREATORE, false))
+                    .isInstanceOf(BusinessRuleException.class)
+                    .hasMessage("La partita è già iniziata");
+            assertThat(p.getTipo()).isEqualTo(TipoPartita.PRIVATA);
+        }
+
+        @Test
+        void unMinutoPrimaCambiaTipoEIPartecipantiRestano() {
+            Partita p = partita(StatoPartita.CONFERMATA, TipoPartita.PUBBLICA, ADESSO.plusMinutes(1));
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, true));
+            stubLock(p);
+
+            PartitaDTO.DettaglioResponse r = service.cambiaTipo(7, "PRIVATA", TEL_CREATORE, false);
+
+            assertThat(p.getTipo()).isEqualTo(TipoPartita.PRIVATA);
+            assertThat(r.getTipo()).isEqualTo("PRIVATA");
+            assertThat(r.getPosti()).hasSize(2);
+            assertThat(r.getAzioni().getPuoCambiareTipo()).isTrue();
+        }
+
+        @Test
+        void puoCambiareTipoCoincideConCambiaTipo() {
+            for (StatoPartita stato : StatoPartita.values()) {
+                for (LocalDateTime inizio : List.of(ADESSO, ADESSO.plusSeconds(1))) {
+                    for (String telefono : List.of(TEL_CREATORE, TEL_2)) {
+                        stubPartita(scenario(stato, inizio));
+                        boolean puo = service.getDettaglio(7, telefono, false).getAzioni().getPuoCambiareTipo();
+
+                        stubLock(scenario(stato, inizio));
+                        boolean riuscito;
+                        try {
+                            service.cambiaTipo(7, "PUBBLICA", telefono, false);
+                            riuscito = true;
+                        } catch (AccessoNegatoException | BusinessRuleException ex) {
+                            riuscito = false;
+                        }
+
+                        assertThat(riuscito).as("%s, inizio %s, %s", stato, inizio, telefono).isEqualTo(puo);
+                    }
+                }
+            }
+        }
+
+        private Partita scenario(StatoPartita stato, LocalDateTime inizio) {
+            Partita p = partita(stato, TipoPartita.PRIVATA, inizio);
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, true, false));
+            return p;
+        }
+    }
+
+    // ============================================
     // Helper
     // ============================================
     private Partita partita(StatoPartita stato, TipoPartita tipo, LocalDateTime inizio) {
+
         Partita p = new Partita();
         p.setId(7);
         p.setCampo(campoDiurno);
@@ -2775,9 +3040,11 @@ class PartitaServiceTest {
         assertThat(a.getPuoUscire()).isFalse();
         assertThat(a.getPuoConfermare()).isFalse();
         assertThat(a.getPuoRegistrareRisultato()).isFalse();
+        assertThat(a.getPuoCambiareTipo()).isFalse();
     }
 
-    private Utente stubEstraneo(double livello) {
+    private Utente stubEstraneo
+(double livello) {
         Utente estraneo = new Utente(TEL_ESTRANEO, "Anna", "Bianchi", "x", LocalDate.of(1990, 1, 1), false, livello);
         when(utenteRepository.findById(TEL_ESTRANEO)).thenReturn(Optional.of(estraneo));
         return estraneo;

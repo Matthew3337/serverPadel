@@ -98,7 +98,29 @@ class PrenotazioneControllerTest {
     }
 
     @Test
+    void postPassaAlServiceGliInvitati() throws Exception {
+        when(prenotazioneService.create(any(), anyString())).thenReturn(rispostaQualsiasi());
+        String json = """
+                {"idCampo":1,"dataPrenotazione":"%s","oraInizio":"10:00","tipo":"PRIVATA","invitati":["%s"]}
+                """.formatted(LocalDate.now().plusDays(3), TEL_2);
+
+        postPrenotazione(json).andExpect(status().isCreated());
+
+        verify(prenotazioneService).create(argThat(r -> java.util.List.of(TEL_2).equals(r.getInvitati())), eq(TEL_1));
+    }
+
+    @Test
+    void postInvitatiNonValidi400ConFormatoErrore() throws Exception {
+        when(prenotazioneService.create(any(), anyString()))
+                .thenThrow(new com.padelbooking.api.exception.RichiestaNonValidaException("Non puoi invitare te stesso"));
+
+        assertErrore(postPrenotazione(body(LocalDate.now().plusDays(3), "10:00", "PRIVATA")), 400,
+                "Non puoi invitare te stesso");
+    }
+
+    @Test
     void postIgnoraITelefoniDeiGiocatoriNelBody() throws Exception {
+
         // Un client vecchio che indica un altro utente come giocatore 1 non può creare partite a suo nome
         when(prenotazioneService.create(any(), anyString())).thenReturn(rispostaQualsiasi());
         String json = """

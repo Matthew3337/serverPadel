@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.List;
 
 public class PrenotazioneDTO {
     public static class CreateRequest {
@@ -16,6 +17,9 @@ public class PrenotazioneDTO {
         // Stringa e non enum, così un valore errato dà 400 con messaggio invece di un errore di parsing.
         @NotBlank(message = "Il tipo è obbligatorio")
         @Pattern(regexp = "PUBBLICA|PRIVATA", message = "Il tipo deve essere PUBBLICA o PRIVATA") private String tipo;
+        // R11: telefoni degli utenti da invitare subito, facoltativo. Niente annotazioni: numero, duplicati e
+        // creatore li controlla il service, con messaggi senza il prefisso del campo come in AdminService
+        private List<String> invitati;
         public CreateRequest() { }
         public Integer getIdCampo() { return idCampo; }
         public void setIdCampo(Integer idCampo) { this.idCampo = idCampo; }
@@ -25,6 +29,8 @@ public class PrenotazioneDTO {
         public void setOraInizio(LocalTime value) { this.oraInizio = value; }
         public String getTipo() { return tipo; }
         public void setTipo(String value) { this.tipo = value; }
+        public List<String> getInvitati() { return invitati; }
+        public void setInvitati(List<String> value) { this.invitati = value; }
     }
 
     public static class Response {
