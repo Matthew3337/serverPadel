@@ -17,7 +17,7 @@ Questa versione sostituisce la tabella `prenotazione` con `partita` e `partecipa
 
 Ogni push su `main` avvia [.github/workflows/deploy.yml](.github/workflows/deploy.yml), che costruisce l'immagine Docker, la pubblica su ghcr.io e la installa sulla VM di produzione. Prima di riavviare il container il workflow copia `sql/*.sql` sulla VM in `~/padel-sql/` e applica al database `padel_booking` le migrazioni `sql/AAAA-MM-GG_descrizione.sql` non ancora eseguite, in ordine alfabetico. Le migrazioni applicate sono registrate nella tabella `schema_migrazioni`. Se un pull o una migrazione falliscono il deploy si ferma e il container in esecuzione non viene toccato. Le migrazioni non vanno quindi applicate a mano; `sql/creazione_database.sql` non viene mai eseguito dal deploy.
 
-L'utente admin inserito via seed ha come password l'hash placeholder presente nello script SQL: **va sostituito** con un hash BCrypt reale prima di poter fare login. Il modo più semplice è registrare un utente normale tramite `/api/auth/register`, poi aggiornare manualmente `is_admin = 1` per quell'utente via query SQL, invece di usare l'hash placeholder.
+L'utente admin di produzione (telefono `0000000000`) è creato dalla migrazione `sql/2026-11-06_utente_admin.sql`, che contiene solo l'hash BCrypt della password. `sql/creazione_database.sql` non crea admin: su un database nuovo si registra un utente con `/api/auth/register` e poi si imposta `is_admin = 1` via SQL. La registrazione crea sempre utenti non admin.
 
 ## Endpoint disponibili
 
