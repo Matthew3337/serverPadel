@@ -62,12 +62,13 @@ public interface PartitaRepository extends JpaRepository<Partita, Integer> {
                                                       @Param("oraDa") LocalTime oraDa);
 
     // Candidate per la bacheca (RF_GP_11): partite di un tipo e di uno stato con data_partita da una data in poi.
-    // Campo e creatore in JOIN FETCH perché servono a ogni riga della risposta.
+    // Campo e creatore in JOIN FETCH perché servono a ogni riga della risposta. Il creatore in LEFT JOIN:
+    // è null se ha eliminato l'account senza un admin a cui passare la partita (T18), che resta in bacheca.
     // Come sopra, data_partita è la data della serata: il service filtra e ordina sull'inizio effettivo.
     @Query("""
             SELECT p FROM Partita p
             JOIN FETCH p.campo
-            JOIN FETCH p.creatore
+            LEFT JOIN FETCH p.creatore
             WHERE p.tipo = :tipo
               AND p.stato = :stato
               AND p.dataPartita >= :dataDa
@@ -103,6 +104,23 @@ public interface PartitaRepository extends JpaRepository<Partita, Integer> {
             WHERE p.dataPartita = :data
             """)
     List<Partita> findByDataConPartecipanti(@Param("data") LocalDate data);
+
+    // Eliminazione dell'account (T18): gli id delle partite collegate all'utente, come creatore, come
+    // registrante del risultato o con un posto, in ordine di id, che è l'ordine in cui il service le blocca.
+    // Solo gli id: le partite si leggono poi una per una con il lock, così nessuna arriva da questa lettura
+    // senza lock. LEFT JOIN perché creatore e registrante possono essere null.
+    @Query("""
+            SELECT p.id FROM Partita p
+            LEFT JOIN p.creatore c
+            LEFT JOIN p.registrante r
+            WHERE c.telefono = :telefono
+               OR r.telefono = :telefono
+               OR EXISTS (SELECT pa FROM Partecipazione pa
+                          WHERE pa.partita = p
+                            AND pa.utente.telefono = :telefono)
+            ORDER BY p.id ASC
+            """)
+    List<Integer> findIdCollegateAUtente(@Param("telefono") String telefono);
 
     // Partita con lock in scrittura (SELECT ... FOR UPDATE) fino alla fine della transazione:
     // serve all'ingresso, così due richieste simultanee sull'ultimo posto vengono serializzate

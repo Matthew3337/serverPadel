@@ -56,10 +56,11 @@ CREATE TABLE campo (
 -- slot_attivo vale NULL per loro, così il vincolo unico le ignora e lo slot torna prenotabile.
 -- Il vincolo unico impedisce due partite attive sullo stesso slot anche con richieste simultanee.
 -- I game dei set sono NULL finché il risultato non è registrato; il terzo set resta NULL se finisce 2-0.
+-- telefono_creatore è NULL se il creatore ha eliminato l'account e la partita non è passata a un admin.
 CREATE TABLE partita (
     id                   INT         NOT NULL AUTO_INCREMENT,
     id_campo             INT         NOT NULL,
-    telefono_creatore    VARCHAR(20) NOT NULL,
+    telefono_creatore    VARCHAR(20) NULL,
     data_partita         DATE        NOT NULL,
     ora_inizio           TIME        NOT NULL,
     ora_fine             TIME        NOT NULL,
@@ -95,7 +96,9 @@ CREATE TABLE partita (
 -- Un posto occupato in una partita. Il giocatore campo è una riga con tipo CAMPO e senza utente.
 -- squadra (1 o 2) si valorizza quando si registra il risultato; punti_assegnati serve per lo storno.
 -- Massimo 4 posti, almeno 1 utente e massimo 3 giocatori campo li controlla il service.
--- Il vincolo unico ignora le righe CAMPO (telefono NULL), quindi possono essercene più di una.
+-- Il vincolo unico ignora le righe con telefono NULL, quindi possono essercene più di una.
+-- Una riga UTENTE senza telefono è il posto di un utente che ha eliminato l'account, in una partita
+-- già finita o annullata: resta con squadra e punti per non cambiare lo storico degli altri.
 CREATE TABLE partecipazione (
     id              INT         NOT NULL AUTO_INCREMENT,
     id_partita      INT         NOT NULL,
@@ -113,7 +116,7 @@ CREATE TABLE partecipazione (
         FOREIGN KEY (telefono_utente) REFERENCES utente (telefono),
     CONSTRAINT ck_partecipazione_squadra CHECK (squadra IN (1, 2)),
     CONSTRAINT ck_partecipazione_tipo CHECK (
-        (tipo = 'UTENTE' AND telefono_utente IS NOT NULL) OR
+        (tipo = 'UTENTE') OR
         (tipo = 'CAMPO'  AND telefono_utente IS NULL AND confermata = FALSE
                          AND invitato = FALSE AND punti_assegnati IS NULL))
 ) ENGINE = InnoDB;
@@ -162,5 +165,17 @@ CREATE TABLE schema_migrazioni (
     PRIMARY KEY (nome_file)
 ) ENGINE = InnoDB;
 
+-- Utente amministratore dedicato (login con telefono 0000000000), lo stesso di 2026-11-06_utente_admin.sql:
+-- dato che quella migrazione risulta già applicata, senza questa riga un database nuovo non avrebbe l'admin.
+-- La password è salvata solo come hash BCrypt; il testo in chiaro non è nel repository.
+-- Livello e punteggio restano ai default: l'admin è escluso da classifica, inviti e bacheca.
+INSERT INTO utente (telefono, nome, cognome, password, data_nascita, is_admin)
+VALUES ('0000000000', 'Admin', 'Padel',
+        '$2a$10$CTQ8EtVLyNHpVRI0DWKYg.gFC4N9KOUuQ2nTDqU01f8Hj0YXcil.K',
+        '2000-01-01', TRUE);
+
 -- Migrazioni già incluse in questo script.
-INSERT INTO schema_migrazioni (nome_file, applicata_il) VALUES ('2026-11-03_game_fino_a_sette.sql', NOW());
+INSERT INTO schema_migrazioni (nome_file, applicata_il) VALUES
+    ('2026-11-03_game_fino_a_sette.sql', NOW()),
+    ('2026-11-06_utente_admin.sql', NOW()),
+    ('2026-11-07_eliminazione_account.sql', NOW());

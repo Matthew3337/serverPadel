@@ -50,4 +50,14 @@ public interface UtenteRepository extends JpaRepository<Utente, String> {
             ORDER BY u.punteggio DESC, u.cognome ASC, u.nome ASC, u.telefono ASC
             """)
     List<Utente> findClassifica();
+
+    // Eliminazione dell'account (T18): gli admin diversi da chi si elimina, per telefono. Il primo riceve le
+    // partite non ancora finite create da chi si elimina.
+    @Query("""
+            SELECT u FROM Utente u
+            WHERE u.isAdmin = true
+              AND u.telefono <> :escluso
+            ORDER BY u.telefono ASC
+            """)
+    List<Utente> findAdminTranne(@Param("escluso") String escluso);
 }

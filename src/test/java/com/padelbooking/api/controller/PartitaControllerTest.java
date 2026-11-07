@@ -70,8 +70,8 @@ class PartitaControllerTest {
         PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
                 7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
                 "creata", "PUBBLICA", TEL_1,
-                List.of(new PartitaDTO.PostoResponse(11, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, false, null),
-                        new PartitaDTO.PostoResponse(12, "CAMPO", null, null, null, null, false, null)),
+                List.of(new PartitaDTO.PostoResponse(11, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, false, null, false),
+                        new PartitaDTO.PostoResponse(12, "CAMPO", null, null, null, null, false, null, false)),
                 new PartitaDTO.AzioniResponse(true, true, false, false, false, true), null);
         when(partitaService.getDettaglio(7, TEL_1, false)).thenReturn(r);
 
@@ -265,8 +265,8 @@ class PartitaControllerTest {
         PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
                 7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
                 "creata", "PUBBLICA", "3330000009",
-                List.of(new PartitaDTO.PostoResponse(13, "UTENTE", "3330000009", "Anna", "Bianchi", 2.0, false, null),
-                        new PartitaDTO.PostoResponse(14, "UTENTE", TEL_1, "Nome", "Cognome", 1.0, false, null)),
+                List.of(new PartitaDTO.PostoResponse(13, "UTENTE", "3330000009", "Anna", "Bianchi", 2.0, false, null, false),
+                        new PartitaDTO.PostoResponse(14, "UTENTE", TEL_1, "Nome", "Cognome", 1.0, false, null, false)),
                 new PartitaDTO.AzioniResponse(false, false, true, false, false, false), null);
         when(partitaService.entra(7, TEL_1, false)).thenReturn(r);
 
@@ -451,8 +451,8 @@ class PartitaControllerTest {
         PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
                 7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
                 "confermata", "PRIVATA", TEL_1,
-                List.of(new PartitaDTO.PostoResponse(15, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, true, null),
-                        new PartitaDTO.PostoResponse(16, "CAMPO", null, null, null, null, false, null)),
+                List.of(new PartitaDTO.PostoResponse(15, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, true, null, false),
+                        new PartitaDTO.PostoResponse(16, "CAMPO", null, null, null, null, false, null, false)),
                 new PartitaDTO.AzioniResponse(false, false, false, false, false, false), null);
         when(partitaService.conferma(7, TEL_1, false)).thenReturn(r);
 
@@ -577,8 +577,8 @@ class PartitaControllerTest {
         PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
                 7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
                 "creata", "PRIVATA", TEL_1,
-                List.of(new PartitaDTO.PostoResponse(17, "UTENTE", TEL_1, "Nome", "Cognome", 1.0, false, null),
-                        new PartitaDTO.PostoResponse(18, "UTENTE", "3330000002", "Luigi", "Rossi", 3.5, false, null)),
+                List.of(new PartitaDTO.PostoResponse(17, "UTENTE", TEL_1, "Nome", "Cognome", 1.0, false, null, false),
+                        new PartitaDTO.PostoResponse(18, "UTENTE", "3330000002", "Luigi", "Rossi", 3.5, false, null, false)),
                 new PartitaDTO.AzioniResponse(true, true, false, false, false, true), null);
         when(partitaService.invita(7, "3330000002", TEL_1, false)).thenReturn(r);
 
@@ -729,8 +729,8 @@ class PartitaControllerTest {
         PartitaDTO.DettaglioResponse r = new PartitaDTO.DettaglioResponse(
                 7, 1, "Campo 1", LocalDate.of(2026, 11, 5), LocalTime.of(18, 0), LocalTime.of(19, 30),
                 "giocata", "PRIVATA", TEL_1,
-                List.of(new PartitaDTO.PostoResponse(11, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, true, 1),
-                        new PartitaDTO.PostoResponse(14, "CAMPO", null, null, null, null, false, 2)),
+                List.of(new PartitaDTO.PostoResponse(11, "UTENTE", TEL_1, "Mario", "Rossi", 2.5, true, 1, false),
+                        new PartitaDTO.PostoResponse(14, "CAMPO", null, null, null, null, false, 2, false)),
                 new PartitaDTO.AzioniResponse(false, false, false, false, false, false), risultato);
         ArgumentCaptor<PartitaDTO.RisultatoRequest> body = ArgumentCaptor.forClass(PartitaDTO.RisultatoRequest.class);
         when(partitaService.registraRisultato(eq(7), body.capture(), eq(TEL_1), eq(false))).thenReturn(r);

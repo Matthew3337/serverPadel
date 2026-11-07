@@ -480,6 +480,41 @@ class AdminServiceTest {
             verify(utenteRepository, never()).findById(any());
         }
 
+        // T18: il posto di un utente eliminato non ha telefono, quindi non può stare in telefoni: resta com'è,
+        // come un posto CAMPO. Anche il creatore null resta null
+        @Test
+        void postoDiUtenteEliminatoRestaIntattoEIlCreatoreNullNonCambia() {
+            Partita p = partita(StatoPartita.CONFERMATA, 18, TEL_A, TEL_B, TEL_C);
+            Partecipazione anonimo = p.getPartecipazioni().get(0);
+            anonimo.setUtente(null);
+            anonimo.setConfermata(true);
+            p.setCreatore(null);
+            stubLock(p);
+            stubUtente(TEL_D);
+
+            PartitaDTO.DettaglioResponse risposta =
+                    service.modificaPartecipanti(ID_PARTITA, List.of(TEL_B, TEL_D, TEL_C), TEL_ADMIN);
+
+            assertThat(p.getPartecipazioni()).hasSize(4).contains(anonimo);
+            assertThat(anonimo.getUtente()).isNull();
+            assertThat(anonimo.getTipo()).isEqualTo(TipoPartecipazione.UTENTE);
+            assertThat(p.getCreatore()).isNull();
+            assertThat(risposta.getTelefonoCreatore()).isNull();
+            assertThat(risposta.getPosti()).filteredOn(PartitaDTO.PostoResponse::getEliminato).hasSize(1);
+        }
+
+        @Test
+        void postoDiUtenteEliminatoContaNelLimiteDeiQuattro() {
+            Partita p = partita(StatoPartita.CONFERMATA, 18, TEL_A, TEL_B);
+            p.getPartecipazioni().get(0).setUtente(null);
+            stubLock(p);
+
+            assertThatThrownBy(() ->
+                    service.modificaPartecipanti(ID_PARTITA, List.of(TEL_B, TEL_C, TEL_D, TEL_E), TEL_ADMIN))
+                    .isInstanceOf(RichiestaNonValidaException.class)
+                    .hasMessage("Una partita può avere al massimo 4 giocatori");
+        }
+
         @Test
         void inUnaConfermataIlNuovoEConfermatoELaPartitaRestaConfermata() {
             Partita p = partita(StatoPartita.CONFERMATA, 18, TEL_A, TEL_B, TEL_C, TEL_D);

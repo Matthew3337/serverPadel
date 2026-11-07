@@ -5,6 +5,8 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 // Un posto occupato in una partita. Le righe di tipo CAMPO (giocatore del circolo) non hanno utente.
+// Anche una riga UTENTE può non averlo: è il posto di chi ha eliminato l'account in una partita già finita
+// o annullata (T18), che resta con squadra e punti per non cambiare lo storico degli altri.
 @Entity
 @Table(name = "partecipazione")
 public class Partecipazione {
@@ -48,6 +50,11 @@ public class Partecipazione {
         this.utente = utente;
         this.invitato = invitato;
         this.confermata = confermata;
+    }
+
+    // Posto UTENTE di un account eliminato: si mostra come "Utente eliminato"
+    public boolean utenteEliminato() {
+        return tipo == TipoPartecipazione.UTENTE && utente == null;
     }
 
     public Integer getId() {

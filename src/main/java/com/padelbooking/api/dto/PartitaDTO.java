@@ -21,6 +21,7 @@ public class PartitaDTO {
         private String stato;
         // PUBBLICA o PRIVATA
         private String tipo;
+        // null se il creatore ha eliminato l'account e non c'era un altro admin a cui passare la partita (T18)
         private String telefonoCreatore;
         // Solo i posti occupati, con il creatore per primo
         private List<PostoResponse> posti;
@@ -76,11 +77,14 @@ public class PartitaDTO {
         private Boolean confermata;
         // 1 o 2; null finché il risultato non è registrato
         private Integer squadra;
+        // T18: true per il posto UTENTE di chi ha eliminato l'account, con telefono, nome, cognome e livello null
+        private Boolean eliminato;
         public PostoResponse() { }
         public PostoResponse(Integer idPosto, String tipo, String telefono, String nome, String cognome, Double livello,
-                             Boolean confermata, Integer squadra) {
+                             Boolean confermata, Integer squadra, Boolean eliminato) {
             this.idPosto = idPosto; this.tipo = tipo; this.telefono = telefono; this.nome = nome;
             this.cognome = cognome; this.livello = livello; this.confermata = confermata; this.squadra = squadra;
+            this.eliminato = eliminato;
         }
         public Integer getIdPosto() { return idPosto; }
         public void setIdPosto(Integer value) { this.idPosto = value; }
@@ -98,6 +102,8 @@ public class PartitaDTO {
         public void setConfermata(Boolean value) { this.confermata = value; }
         public Integer getSquadra() { return squadra; }
         public void setSquadra(Integer value) { this.squadra = value; }
+        public Boolean getEliminato() { return eliminato; }
+        public void setEliminato(Boolean value) { this.eliminato = value; }
     }
 
     // Azioni che l'utente del token può fare adesso sulla partita: il client mostra solo i pulsanti a true
