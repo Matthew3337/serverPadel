@@ -3008,6 +3008,71 @@ class PartitaServiceTest {
     }
 
     // ============================================
+    // Account eliminati (T18)
+    // ============================================
+    @Nested
+    class AccountEliminato {
+
+        @Test
+        void dettaglioConCreatoreNullEPostoAnonimo() {
+            Partita p = partita(StatoPartita.GIOCATA, TipoPartita.PRIVATA, ADESSO.minusDays(2));
+            p.setCreatore(null);
+            Partecipazione anonimo = p.getPartecipazioni().get(0);
+            anonimo.setUtente(null);
+            anonimo.setSquadra(1);
+            aggiungi(p, 2, new Partecipazione(TipoPartecipazione.UTENTE, secondo, false, true));
+            p.getPartecipazioni().get(1).setSquadra(2);
+            stubPartita(p);
+
+            PartitaDTO.DettaglioResponse r = service.getDettaglio(7, TEL_2, false);
+
+            assertThat(r.getTelefonoCreatore()).isNull();
+            PartitaDTO.PostoResponse posto = r.getPosti().get(0);
+            assertThat(posto.getTipo()).isEqualTo("UTENTE");
+            assertThat(posto.getEliminato()).isTrue();
+            assertThat(posto.getTelefono()).isNull();
+            assertThat(posto.getNome()).isNull();
+            assertThat(posto.getLivello()).isNull();
+            assertThat(posto.getSquadra()).isEqualTo(1);
+            assertThat(r.getPosti().get(1).getEliminato()).isFalse();
+            assertThat(r.getPosti().get(1).getTelefono()).isEqualTo(TEL_2);
+        }
+
+        @Test
+        void creatoreNullComeAdminVisibileATuttiINonGestibile() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3));
+            p.setCreatore(null);
+            stubPartita(p);
+            stubEstraneo(5.0);
+
+            PartitaDTO.DettaglioResponse estraneo = service.getDettaglio(7, TEL_ESTRANEO, false);
+            PartitaDTO.DettaglioResponse partecipante = service.getDettaglio(7, TEL_CREATORE, false);
+
+            assertThat(estraneo.getTelefonoCreatore()).isNull();
+            assertThat(partecipante.getAzioni().getPuoInvitare()).isFalse();
+            assertThat(partecipante.getAzioni().getPuoEliminare()).isFalse();
+            assertThat(partecipante.getAzioni().getPuoCambiareTipo()).isFalse();
+            assertThat(partecipante.getAzioni().getPuoUscire()).isTrue();
+        }
+
+        @Test
+        void bachecaConCreatoreNullSenzaDatiDelCreatore() {
+            Partita p = partita(StatoPartita.CREATA, TipoPartita.PUBBLICA, ADESSO.plusDays(3));
+            p.setCreatore(null);
+            when(partitaRepository.findByTipoAndStatoDaData(TipoPartita.PUBBLICA, StatoPartita.CREATA,
+                    ADESSO.toLocalDate())).thenReturn(List.of(p));
+            stubEstraneo(5.0);
+
+            List<PartitaDTO.BachecaResponse> r = service.getBachecaPubbliche(TEL_ESTRANEO, false);
+
+            assertThat(r).hasSize(1);
+            assertThat(r.get(0).getNomeCreatore()).isNull();
+            assertThat(r.get(0).getCognomeCreatore()).isNull();
+            assertThat(r.get(0).getLivelloCreatore()).isNull();
+        }
+    }
+
+    // ============================================
     // Helper
     // ============================================
     private Partita partita(StatoPartita stato, TipoPartita tipo, LocalDateTime inizio) {

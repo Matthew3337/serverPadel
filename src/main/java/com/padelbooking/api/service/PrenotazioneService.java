@@ -229,7 +229,9 @@ public class PrenotazioneService {
         Partita partita = partitaRepository.findById(idPrenotazione)
                 .orElseThrow(() -> new ResourceNotFoundException("Prenotazione non trovata con id " + idPrenotazione));
 
-        boolean isProprietario = partita.getCreatore().getTelefono().equals(telefonoUtenteRichiedente);
+        // Con il creatore null (account eliminato, T18) non c'è un proprietario: resta solo l'admin
+        boolean isProprietario = partita.getCreatore() != null
+                && partita.getCreatore().getTelefono().equals(telefonoUtenteRichiedente);
         if (!isProprietario && !isAdmin) {
             throw new BusinessRuleException("Non hai i permessi per cancellare questa prenotazione");
         }
@@ -430,9 +432,10 @@ public class PrenotazioneService {
     // giocatore 1 = creatore, giocatori 2-4 = le altre partecipazioni UTENTE in ordine di id
     // (garantito da @OrderBy su Partita.partecipazioni, e dall'ordine di inserimento appena dopo la create).
     private PrenotazioneDTO.Response toResponse(Partita p) {
-        String telefonoCreatore = p.getCreatore().getTelefono();
+        // T18: il creatore è null se ha eliminato l'account, e i posti degli utenti eliminati non hanno telefono
+        String telefonoCreatore = p.getCreatore() != null ? p.getCreatore().getTelefono() : null;
         List<String> altriGiocatori = p.getPartecipazioni().stream()
-                .filter(pa -> pa.getTipo() == TipoPartecipazione.UTENTE)
+                .filter(pa -> pa.getTipo() == TipoPartecipazione.UTENTE && pa.getUtente() != null)
                 .map(pa -> pa.getUtente().getTelefono())
                 .filter(telefono -> !telefono.equals(telefonoCreatore))
                 .toList();

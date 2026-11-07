@@ -810,9 +810,10 @@ public class PartitaService {
 
     // Creatore = il richiedente occupa il posto UTENTE del creatore. Un admin creatore non occupa un posto
     // (vedi AdminService.modificaPartecipanti): in quel caso nessun partecipante è il creatore, quindi
-    // nessuno invita o elimina e tutti possono uscire.
+    // nessuno invita o elimina e tutti possono uscire. Lo stesso vale con il creatore null (T18).
     private boolean eCreatore(Partita partita, Partecipazione partecipazione) {
         return partecipazione != null
+                && partita.getCreatore() != null
                 && partecipazione.getUtente().getTelefono().equals(partita.getCreatore().getTelefono());
     }
 
@@ -833,8 +834,9 @@ public class PartitaService {
         return Math.abs(richiedente.getLivello() - creatore.getLivello()) <= DIFFERENZA_LIVELLO_MAX;
     }
 
+    // T18: un creatore null (ha eliminato l'account) vale come un creatore admin
     private boolean creatoreAdmin(Utente creatore) {
-        return Boolean.TRUE.equals(creatore.getIsAdmin());
+        return creatore == null || Boolean.TRUE.equals(creatore.getIsAdmin());
     }
 
     // Cerca il nome del vincolo nella catena delle cause, come in PrenotazioneService
@@ -861,10 +863,11 @@ public class PartitaService {
                 puoCambiareTipo);
     }
 
-    // Partecipazione UTENTE del richiedente, se occupa un posto nella partita
+    // Partecipazione UTENTE del richiedente, se occupa un posto nella partita. I posti di un utente
+    // eliminato (T18) non hanno utente e non appartengono a nessuno
     private Optional<Partecipazione> trovaPartecipazioneUtente(Partita partita, String telefono) {
         return partita.getPartecipazioni().stream()
-                .filter(pa -> pa.getTipo() == TipoPartecipazione.UTENTE)
+                .filter(pa -> pa.getTipo() == TipoPartecipazione.UTENTE && pa.getUtente() != null)
                 .filter(pa -> pa.getUtente().getTelefono().equals(telefono))
                 .findFirst();
     }
@@ -879,7 +882,8 @@ public class PartitaService {
     // per l'admin e per chi non gioca: serve a vedere il risultato dal suo punto di vista.
     private PartitaDTO.DettaglioResponse toDettaglioResponse(Partita p, PartitaDTO.AzioniResponse azioni,
                                                              Partecipazione delRichiedente) {
-        String telefonoCreatore = p.getCreatore().getTelefono();
+        // null se il creatore ha eliminato l'account (T18): nessun posto è il suo e resta l'ordine di id
+        String telefonoCreatore = p.getCreatore() != null ? p.getCreatore().getTelefono() : null;
         List<PartitaDTO.PostoResponse> posti = p.getPartecipazioni().stream()
                 .sorted(Comparator.comparing((Partecipazione pa) -> !eDelCreatore(pa, telefonoCreatore)))
                 .map(this::toPostoResponse)
@@ -902,17 +906,19 @@ public class PartitaService {
     }
 
     private boolean eDelCreatore(Partecipazione pa, String telefonoCreatore) {
-        return pa.getTipo() == TipoPartecipazione.UTENTE && pa.getUtente().getTelefono().equals(telefonoCreatore);
+        return telefonoCreatore != null && pa.getTipo() == TipoPartecipazione.UTENTE && pa.getUtente() != null
+                && pa.getUtente().getTelefono().equals(telefonoCreatore);
     }
 
+    // Un posto UTENTE senza utente è di chi ha eliminato l'account (T18): niente dati personali e eliminato = true
     private PartitaDTO.PostoResponse toPostoResponse(Partecipazione pa) {
         Utente u = pa.getUtente();
         if (pa.getTipo() == TipoPartecipazione.CAMPO || u == null) {
             return new PartitaDTO.PostoResponse(pa.getId(), pa.getTipo().name(), null, null, null, null,
-                    pa.getConfermata(), pa.getSquadra());
+                    pa.getConfermata(), pa.getSquadra(), pa.utenteEliminato());
         }
         return new PartitaDTO.PostoResponse(pa.getId(), pa.getTipo().name(), u.getTelefono(), u.getNome(),
-                u.getCognome(), u.getLivello(), pa.getConfermata(), pa.getSquadra());
+                u.getCognome(), u.getLivello(), pa.getConfermata(), pa.getSquadra(), false);
     }
 
     private PartitaDTO.StoricoResponse toStoricoResponse(Partecipazione pa) {
@@ -951,6 +957,7 @@ public class PartitaService {
         return new PartitaDTO.RisultatoResponse(set, squadraUtente, esito, pa != null ? pa.getPuntiAssegnati() : null);
     }
 
+    // Con il creatore null (T18) nome e cognome sono null, come il livello di un creatore admin in bacheca
     private PartitaDTO.InvitoRicevutoResponse toInvitoRicevutoResponse(Partita p) {
         Utente creatore = p.getCreatore();
         return new PartitaDTO.InvitoRicevutoResponse(
@@ -962,8 +969,8 @@ public class PartitaService {
                 p.getOraFine(),
                 p.getStato().name().toLowerCase(Locale.ROOT),
                 p.getTipo().name(),
-                creatore.getNome(),
-                creatore.getCognome()
+                creatore != null ? creatore.getNome() : null,
+                creatore != null ? creatore.getCognome() : null
         );
     }
 
@@ -976,9 +983,9 @@ public class PartitaService {
                 p.getDataPartita(),
                 p.getOraInizio(),
                 p.getOraFine(),
-                creatore.getNome(),
-                creatore.getCognome(),
-                // L'admin non ha un livello di gioco: il client non lo mostra
+                creatore != null ? creatore.getNome() : null,
+                creatore != null ? creatore.getCognome() : null,
+                // L'admin non ha un livello di gioco, e un creatore null vale come admin: il client non lo mostra
                 creatoreAdmin(creatore) ? null : creatore.getLivello(),
                 POSTI_MAX - p.getPartecipazioni().size()
         );

@@ -32,12 +32,13 @@ public interface PartecipazioneRepository extends JpaRepository<Partecipazione, 
     // Bacheca inviti (RF_GI_6): le partecipazioni UTENTE dell'utente nate da un invito, nelle partite
     // con uno degli stati indicati (si passano CREATA e CONFERMATA). Partita, campo e creatore sono in
     // JOIN FETCH perché servono a ogni riga della risposta: una sola query per l'intera bacheca.
+    // Il creatore in LEFT JOIN: è null se ha eliminato l'account senza un admin a cui passare la partita (T18).
     // L'ordine sull'inizio effettivo lo fa il service.
     @Query("""
             SELECT pa FROM Partecipazione pa
             JOIN FETCH pa.partita p
             JOIN FETCH p.campo
-            JOIN FETCH p.creatore
+            LEFT JOIN FETCH p.creatore
             WHERE pa.tipo = :tipoUtente
               AND pa.utente.telefono = :telefono
               AND pa.invitato = true

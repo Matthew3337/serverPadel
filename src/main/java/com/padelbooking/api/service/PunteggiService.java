@@ -49,6 +49,8 @@ public class PunteggiService {
     // effettivamente applicata (RF_GCL_11): un perdente a 0 punti ha variazione 0, non -1.
     // I posti CAMPO contano nella media ma non ricevono punti (RF_GCL_8, RF_GCL_10): per loro
     // punti_assegnati resta null, come impone il vincolo ck_partecipazione_tipo.
+    // T18: il posto di un utente eliminato, possibile solo in una partita già finita, conta come un giocatore
+    // campo, perché il suo livello non esiste più, e non riceve punti (null).
     @Transactional(propagation = Propagation.MANDATORY)
     public void assegnaPunti(Partita partita) {
         Integer vincitrice = RegoleRisultatoPartita.squadraVincitrice(partita);
@@ -69,6 +71,10 @@ public class PunteggiService {
                 : PUNTI_VITTORIA_CONTRO_LIVELLO_MINORE;
 
         for (Partecipazione posto : postiUtente) {
+            if (posto.utenteEliminato()) {
+                posto.setPuntiAssegnati(null);
+                continue;
+            }
             int variazione = vincitrice.equals(posto.getSquadra()) ? puntiVittoria : PUNTI_SCONFITTA;
             Utente utente = posto.getUtente();
             int prima = utente.getPunteggio();
@@ -85,8 +91,12 @@ public class PunteggiService {
     // toglie a ogni utente la variazione applicata e azzera punti_assegnati. Una perdita di 1 punto viene
     // quindi restituita. Il punteggio può essere cambiato dopo la partita, per questo vale ancora il
     // minimo 0 (RF_GCL_9). Chiamarlo di nuovo non cambia nulla, perché i posti senza punti si saltano.
+    // T18: il posto di un utente eliminato non ha più un punteggio da correggere: perde solo i suoi punti_assegnati.
     @Transactional(propagation = Propagation.MANDATORY)
     public void stornaPunti(Partita partita) {
+        postiUtente(partita).stream()
+                .filter(Partecipazione::utenteEliminato)
+                .forEach(posto -> posto.setPuntiAssegnati(null));
         List<Partecipazione> postiConPunti = postiUtente(partita).stream()
                 .filter(posto -> posto.getPuntiAssegnati() != null)
                 .toList();
@@ -107,6 +117,7 @@ public class PunteggiService {
     // Helper privati
     // ============================================
 
+    // Comprende i posti degli utenti eliminati (T18), che il chiamante salta
     private List<Partecipazione> postiUtente(Partita partita) {
         return partita.getPartecipazioni().stream()
                 .filter(posto -> posto.getTipo() == TipoPartecipazione.UTENTE)
@@ -122,6 +133,7 @@ public class PunteggiService {
     // sulla stessa riga vanno in deadlock. Va scritto solo dopo aver preso questi lock.
     private void bloccaUtenti(List<Partecipazione> posti) {
         posti.stream()
+                .filter(posto -> !posto.utenteEliminato())
                 .map(Partecipazione::getUtente)
                 .sorted(Comparator.comparing(Utente::getTelefono))
                 .forEach(utente -> entityManager.refresh(utente, LockModeType.PESSIMISTIC_WRITE));
@@ -139,7 +151,7 @@ public class PunteggiService {
     private double mediaSquadra(Partita partita, int squadra, double livelloCampo) {
         return partita.getPartecipazioni().stream()
                 .filter(posto -> posto.getSquadra() != null && posto.getSquadra() == squadra)
-                .mapToDouble(posto -> posto.getTipo() == TipoPartecipazione.UTENTE
+                .mapToDouble(posto -> posto.getTipo() == TipoPartecipazione.UTENTE && !posto.utenteEliminato()
                         ? posto.getUtente().getLivello()
                         : livelloCampo)
                 .average()

@@ -554,10 +554,41 @@ class PunteggiServiceTest {
             assertVariazione(v, 3, 8);
         }
 
+        @Test
+        void conUnPostoAnonimoStornaGliAltriEAzzeraIlSuo() {
+            Partecipazione vincitore = conPunti(utente(VINCENTI, "01", 2.0, 8), 3);
+            Partecipazione anonimo = conPunti(utente(VINCENTI, "02", 2.0, 4), 3);
+            anonimo.setUtente(null);
+
+            service.stornaPunti(partita);
+
+            assertVariazione(vincitore, null, 5);
+            assertThat(anonimo.getPuntiAssegnati()).isNull();
+        }
+
         private Partecipazione conPunti(Partecipazione posto, int punti) {
             posto.setPuntiAssegnati(punti);
             return posto;
         }
+    }
+
+    // T18: il posto di un utente eliminato conta come un giocatore campo e non riceve punti
+    @Test
+    void assegnaPuntiConUnPostoAnonimo() {
+        livelloCampo(4.0);
+        Partecipazione anonimo = utente(VINCENTI, "01", 1.0, 0);
+        anonimo.setUtente(null);
+        Partecipazione compagno = utente(VINCENTI, "02", 2.0, 10);
+        Partecipazione avversario1 = utente(PERDENTI, "03", 3.0, 10);
+        Partecipazione avversario2 = utente(PERDENTI, "04", 3.0, 10);
+
+        service.assegnaPunti(partita);
+
+        assertThat(anonimo.getPuntiAssegnati()).isNull();
+        // Media vincenti (4 + 2) / 2 = 3 contro 3: vittoria contro livello maggiore o uguale
+        assertVariazione(compagno, 3, 13);
+        assertVariazione(avversario1, -1, 9);
+        assertVariazione(avversario2, -1, 9);
     }
 
     // ============================================

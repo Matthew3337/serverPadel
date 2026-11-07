@@ -65,6 +65,8 @@ public class AdminService {
     private static final String VINCOLO_SLOT_UNICO = "uk_partita_slot";
 
     private static final String NOME_GIOCATORE_CAMPO = "Giocatore del campo";
+    // T18: il posto di chi ha eliminato l'account, che resta nelle partite già finite o annullate
+    private static final String NOME_UTENTE_ELIMINATO = "Utente eliminato";
 
     // Messaggi (RNF_U_3): fanno parte del contratto con il client
     private static final String MESSAGGIO_LIVELLO_NON_VALIDO = "Il livello deve essere tra 0 e 5 con passo 0,5";
@@ -195,8 +197,11 @@ public class AdminService {
     // Si toccano solo le differenze: chi resta conserva i suoi dati e nessun utente esce e rientra nella
     // stessa richiesta. Per questo l'ordine di Hibernate, che fa gli INSERT prima dei DELETE, non può
     // violare uk_partecipazione_utente.
-    // Se l'elenco non contiene il creatore, il creatore diventa l'admin che fa la richiesta: telefono_creatore
-    // è obbligatorio, ma l'admin non occupa un posto. Chi viene riaggiunto dopo è un partecipante normale.
+    // Se l'elenco non contiene il creatore, il creatore diventa l'admin che fa la richiesta: l'admin non occupa
+    // un posto. Chi viene riaggiunto dopo è un partecipante normale. Un creatore null (account eliminato, T18)
+    // vale già come admin e resta com'è.
+    // I posti degli utenti eliminati (T18), possibili in una partita finita ma non ancora giocata, non hanno
+    // telefono: non si possono indicare in telefoni, quindi restano e occupano un posto come i giocatori campo.
     @Transactional
     public PartitaDTO.DettaglioResponse modificaPartecipanti(Integer idPartita, List<String> telefoni,
                                                              String telefonoAdmin) {
@@ -210,15 +215,15 @@ public class AdminService {
 
         Partita partita = trovaConLockOLancia(idPartita);
         verificaPostiModificabili(partita);
-        long postiCampo = partita.getPartecipazioni().stream()
-                .filter(pa -> pa.getTipo() == TipoPartecipazione.CAMPO)
+        long postiSenzaUtente = partita.getPartecipazioni().stream()
+                .filter(pa -> pa.getTipo() == TipoPartecipazione.CAMPO || pa.utenteEliminato())
                 .count();
-        if (telefoniFinali.size() + postiCampo > POSTI_MAX) {
+        if (telefoniFinali.size() + postiSenzaUtente > POSTI_MAX) {
             throw new RichiestaNonValidaException(MESSAGGIO_MASSIMO_GIOCATORI);
         }
 
         List<Partecipazione> postiUtente = partita.getPartecipazioni().stream()
-                .filter(pa -> pa.getTipo() == TipoPartecipazione.UTENTE)
+                .filter(pa -> pa.getTipo() == TipoPartecipazione.UTENTE && !pa.utenteEliminato())
                 .toList();
         Set<String> telefoniAttuali = postiUtente.stream()
                 .map(pa -> pa.getUtente().getTelefono())
@@ -234,7 +239,7 @@ public class AdminService {
         // come i lock di PunteggiService, per non andare in deadlock con un risultato registrato in parallelo
         nuovi.sort(Comparator.comparing(Utente::getTelefono));
 
-        if (!telefoniFinali.contains(partita.getCreatore().getTelefono())) {
+        if (partita.getCreatore() != null && !telefoniFinali.contains(partita.getCreatore().getTelefono())) {
             // L'admin ha autenticato la richiesta, quindi esiste: basta il riferimento per la chiave esterna
             partita.setCreatore(utenteRepository.getReferenceById(telefonoAdmin));
         }
@@ -599,6 +604,9 @@ public class AdminService {
     }
 
     private String nomeGiocatore(Partecipazione pa) {
+        if (pa.utenteEliminato()) {
+            return NOME_UTENTE_ELIMINATO;
+        }
         if (pa.getTipo() == TipoPartecipazione.CAMPO || pa.getUtente() == null) {
             return NOME_GIOCATORE_CAMPO;
         }

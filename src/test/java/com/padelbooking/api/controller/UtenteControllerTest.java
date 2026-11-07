@@ -2,6 +2,7 @@ package com.padelbooking.api.controller;
 
 import com.padelbooking.api.config.SecurityConfig;
 import com.padelbooking.api.dto.PartitaDTO;
+import com.padelbooking.api.exception.ResourceNotFoundException;
 import com.padelbooking.api.model.Utente;
 import com.padelbooking.api.security.JwtUtil;
 import com.padelbooking.api.security.UtenteDetailsService;
@@ -24,6 +25,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.mockito.Mockito.doThrow;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -77,6 +80,31 @@ class UtenteControllerTest {
         mockMvc.perform(get("/api/utenti/invitabili")).andExpect(status().isForbidden());
 
         verify(utenteService, never()).getInvitabili(any(), anyString());
+    }
+
+    @Test
+    void eliminaAccount204ConIlTelefonoDelToken() throws Exception {
+        mockMvc.perform(delete("/api/utenti/me").with(user(principal(TEL_1))))
+                .andExpect(status().isNoContent());
+
+        verify(utenteService).eliminaAccount(TEL_1);
+    }
+
+    @Test
+    void eliminaAccountUtenteInesistente404() throws Exception {
+        doThrow(new ResourceNotFoundException("Utente non trovato")).when(utenteService).eliminaAccount(TEL_1);
+
+        mockMvc.perform(delete("/api/utenti/me").with(user(principal(TEL_1))))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.errore").value("Utente non trovato"));
+    }
+
+    @Test
+    void eliminaAccountSenzaAutenticazioneRifiutato() throws Exception {
+        mockMvc.perform(delete("/api/utenti/me")).andExpect(status().isForbidden());
+
+        verify(utenteService, never()).eliminaAccount(anyString());
     }
 
     private static UtentePrincipal principal(String telefono) {

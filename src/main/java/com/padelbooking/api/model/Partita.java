@@ -25,8 +25,10 @@ public class Partita {
     @JoinColumn(name = "id_campo", nullable = false)
     private Campo campo;
 
+    // Null se il creatore ha eliminato l'account e non c'era un altro admin a cui passare la partita (T18):
+    // il codice tratta un creatore null come un creatore admin
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "telefono_creatore", referencedColumnName = "telefono", nullable = false)
+    @JoinColumn(name = "telefono_creatore", referencedColumnName = "telefono")
     private Utente creatore;
 
     @Column(name = "data_partita", nullable = false)
